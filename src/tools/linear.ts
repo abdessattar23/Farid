@@ -6,33 +6,79 @@ const linear = new LinearClient({ apiKey: config.linear.apiKey });
 
 const PROJECT_LABELS = ["Sofrecom", "YouCode", "Hack-Nation", "HR Platform", "Learning"];
 
-// ─── Helpers ───
+// ─── Cached helpers (TTL: 10 min) ───
 
-async function getTeamId(): Promise<string> {
-  const teams = await linear.teams();
-  if (teams.nodes.length === 0) throw new Error("No Linear teams found");
-  return teams.nodes[0].id;
+const CACHE_TTL = 10 * 60 * 1000;
+
+interface CacheEntry<T> { value: T; expires: number }
+
+const cache = {
+  teamId: null as CacheEntry<string> | null,
+  states: new Map<string, CacheEntry<Map<string, string>>>(),
+  labels: new Map<string, CacheEntry<string>>(),
+  viewerId: null as CacheEntry<string> | null,
+};
+
+function isValid<T>(entry: CacheEntry<T> | null | undefined): entry is CacheEntry<T> {
+  return !!entry && Date.now() < entry.expires;
 }
 
-async function findStateId(teamId: string, statusName: string): Promise<string | undefined> {
+async function getTeamId(): Promise<string> {
+  if (isValid(cache.teamId)) return cache.teamId.value;
+  const teams = await linear.teams();
+  if (teams.nodes.length === 0) throw new Error("No Linear teams found");
+  const id = teams.nodes[0].id;
+  cache.teamId = { value: id, expires: Date.now() + CACHE_TTL };
+  return id;
+}
+
+async function getViewerId(): Promise<string> {
+  if (isValid(cache.viewerId)) return cache.viewerId.value;
+  const me = await linear.viewer;
+  cache.viewerId = { value: me.id, expires: Date.now() + CACHE_TTL };
+  return me.id;
+}
+
+async function getStateMap(teamId: string): Promise<Map<string, string>> {
+  const cached = cache.states.get(teamId);
+  if (isValid(cached)) return cached.value;
+
   const states = await linear.workflowStates({
     filter: { team: { id: { eq: teamId } } },
   });
-  const match = states.nodes.find(
-    (s) => s.name.toLowerCase() === statusName.toLowerCase()
-  );
-  return match?.id;
+  const map = new Map<string, string>();
+  for (const s of states.nodes) map.set(s.name.toLowerCase(), s.id);
+  cache.states.set(teamId, { value: map, expires: Date.now() + CACHE_TTL });
+  return map;
+}
+
+async function findStateId(teamId: string, statusName: string): Promise<string | undefined> {
+  const map = await getStateMap(teamId);
+  return map.get(statusName.toLowerCase());
+}
+
+async function findCompletedStateId(teamId: string): Promise<string | undefined> {
+  const states = await linear.workflowStates({
+    filter: { team: { id: { eq: teamId } }, type: { eq: "completed" } },
+  });
+  return states.nodes[0]?.id;
 }
 
 async function findOrCreateLabel(name: string): Promise<string> {
-  const labels = await linear.issueLabels({
-    filter: { name: { eq: name } },
-  });
-  if (labels.nodes.length > 0) return labels.nodes[0].id;
+  const cached = cache.labels.get(name);
+  if (isValid(cached)) return cached.value;
+
+  const labels = await linear.issueLabels({ filter: { name: { eq: name } } });
+  if (labels.nodes.length > 0) {
+    const id = labels.nodes[0].id;
+    cache.labels.set(name, { value: id, expires: Date.now() + CACHE_TTL });
+    return id;
+  }
 
   const created = await linear.createIssueLabel({ name, color: "#6B7280" });
   const label = await created.issueLabel;
   if (!label) throw new Error(`Failed to create label: ${name}`);
+  cache.labels.set(name, { value: label.id, expires: Date.now() + CACHE_TTL });
   return label.id;
 }
 
@@ -74,23 +120,16 @@ registerTool({
     limit: { type: "number", description: "Max results (default 15)" },
   },
   async execute(args) {
-    const me = await linear.viewer;
+    const viewerId = await getViewerId();
     const filter: any = {
-      assignee: { id: { eq: me.id } },
+      assignee: { id: { eq: viewerId } },
       state: { type: { nin: ["completed", "canceled"] } },
     };
 
-    if (args.priority) {
-      filter.priority = { eq: Number(args.priority) };
-    }
-    if (args.project) {
-      filter.labels = { name: { eq: args.project } };
-    }
+    if (args.priority) filter.priority = { eq: Number(args.priority) };
+    if (args.project) filter.labels = { name: { eq: args.project } };
 
-    const issues = await linear.issues({
-      filter,
-      first: args.limit || 15,
-    });
+    const issues = await linear.issues({ filter, first: args.limit || 15 });
 
     if (issues.nodes.length === 0) {
       return args.project
@@ -100,8 +139,7 @@ registerTool({
 
     const lines = await Promise.all(
       issues.nodes.map(async (issue) => {
-        const state = await issue.state;
-        const labels = await issue.labels();
+        const [state, labels] = await Promise.all([issue.state, issue.labels()]);
         const labelNames = labels.nodes.map((l) => l.name).join(", ");
         const priority = ["None", "Urgent", "High", "Medium", "Low"][issue.priority ?? 0];
         return `• [${issue.identifier}] ${issue.title} | ${priority} | ${state?.name || "?"} | ${labelNames || "No label"}`;
@@ -156,9 +194,7 @@ registerTool({
     limit: { type: "number", description: "Max results (default 10)" },
   },
   async execute(args) {
-    const results = await linear.searchIssues(args.query, {
-      first: args.limit || 10,
-    });
+    const results = await linear.searchIssues(args.query, { first: args.limit || 10 });
 
     if (results.nodes.length === 0) return `No tasks found matching "${args.query}".`;
 
@@ -188,13 +224,10 @@ registerTool({
     const team = await issue.team;
     if (!team) return "Could not determine the team for this task.";
 
-    const states = await linear.workflowStates({
-      filter: { team: { id: { eq: team.id } }, type: { eq: "completed" } },
-    });
+    const stateId = await findCompletedStateId(team.id);
+    if (!stateId) return "No 'completed' status found for this team.";
 
-    if (states.nodes.length === 0) return "No 'completed' status found for this team.";
-
-    await linear.updateIssue(issue.id, { stateId: states.nodes[0].id });
+    await linear.updateIssue(issue.id, { stateId });
     return `Task [${issue.identifier}] "${issue.title}" marked as done!`;
   },
 });
@@ -204,10 +237,10 @@ registerTool({
   description: "Get a summary of all tasks grouped by project and status — useful for daily briefs",
   parameters: {},
   async execute() {
-    const me = await linear.viewer;
+    const viewerId = await getViewerId();
     const issues = await linear.issues({
       filter: {
-        assignee: { id: { eq: me.id } },
+        assignee: { id: { eq: viewerId } },
         state: { type: { nin: ["completed", "canceled"] } },
       },
       first: 100,
@@ -218,8 +251,13 @@ registerTool({
     const byProject: Record<string, { urgent: number; high: number; medium: number; low: number; total: number }> = {};
     let totalCount = 0;
 
-    for (const issue of issues.nodes) {
-      const labels = await issue.labels();
+    const labelResults = await Promise.all(
+      issues.nodes.map((issue) => issue.labels())
+    );
+
+    for (let i = 0; i < issues.nodes.length; i++) {
+      const issue = issues.nodes[i];
+      const labels = labelResults[i];
       const projectLabel = labels.nodes.find((l) => PROJECT_LABELS.includes(l.name))?.name || "Other";
 
       if (!byProject[projectLabel]) {

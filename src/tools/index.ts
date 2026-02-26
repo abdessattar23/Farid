@@ -3,4 +3,4 @@ import "./linear";
 import "./reminder";
 import "./productivity";
 
-export { executeTool, generateToolDescriptions, getAllTools } from "./registry";
+export { executeTool, generateToolsParam, getAllTools } from "./registry";

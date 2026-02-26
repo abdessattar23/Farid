@@ -11,18 +11,10 @@ export function registerTool(tool: ToolDefinition): void {
   tools.set(tool.name, tool);
 }
 
-export function getTool(name: string): ToolDefinition | undefined {
-  return tools.get(name);
-}
-
 export function getAllTools(): ToolDefinition[] {
   return Array.from(tools.values());
 }
 
-/**
- * Executes a tool by name with the given arguments.
- * Returns the tool's result as a string, or an error message.
- */
 export async function executeTool(name: string, args: Record<string, any>, chatId: string): Promise<string> {
   const tool = tools.get(name);
   if (!tool) {
@@ -38,22 +30,27 @@ export async function executeTool(name: string, args: Record<string, any>, chatI
 }
 
 /**
- * Generates a tool definitions block for the system prompt.
+ * Returns tools in OpenAI function-calling schema for the API `tools` parameter.
  */
-export function generateToolDescriptions(): string {
-  const toolList = getAllTools();
-  if (toolList.length === 0) return "No tools available.";
+export function generateToolsParam() {
+  return getAllTools().map((tool) => {
+    const properties: Record<string, any> = {};
+    const required: string[] = [];
 
-  return toolList
-    .map((t) => {
-      const params = Object.entries(t.parameters)
-        .map(([key, val]) => {
-          const req = val.required ? " (required)" : " (optional)";
-          const enumStr = val.enum ? ` [one of: ${val.enum.join(", ")}]` : "";
-          return `    - ${key}: ${val.type}${req} — ${val.description}${enumStr}`;
-        })
-        .join("\n");
-      return `- **${t.name}**: ${t.description}\n  Parameters:\n${params}`;
-    })
-    .join("\n\n");
+    for (const [key, param] of Object.entries(tool.parameters)) {
+      const prop: Record<string, any> = { type: param.type, description: param.description };
+      if (param.enum) prop.enum = param.enum;
+      properties[key] = prop;
+      if (param.required) required.push(key);
+    }
+
+    return {
+      type: "function" as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: { type: "object", properties, required },
+      },
+    };
+  });
 }

@@ -1,34 +1,54 @@
 import { config } from "./config";
-import { saveMessage, getHistory, ChatMessage } from "./memory/conversation";
+import { saveMessage, getHistory } from "./memory/conversation";
 import { buildSystemPrompt } from "./prompt";
-import { executeTool } from "./tools";
+import { executeTool, generateToolsParam } from "./tools";
 import { sendMessage, sendPresence } from "./whatsapp";
 import { getActiveFocusSession } from "./tools/productivity";
 
-const TOOL_CALL_REGEX = /:::tool_call\s*\n?([\s\S]*?)\n?:::/;
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 10;
 
-interface LLMMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+// ── Types matching the OpenAI chat completions API ──
+
+interface ToolCallPart {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
 }
 
-/**
- * Calls the Hack Club AI chat completions endpoint.
- */
-async function callLLM(messages: LLMMessage[]): Promise<string> {
+interface LLMMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ToolCallPart[];
+  tool_call_id?: string;
+}
+
+interface LLMResponseMessage {
+  content: string | null;
+  tool_calls?: ToolCallPart[];
+}
+
+// ── LLM caller ──
+
+async function callLLM(messages: LLMMessage[], useTools = true): Promise<LLMResponseMessage> {
+  const body: Record<string, any> = {
+    model: config.hackclub.model,
+    messages,
+    temperature: 0.7,
+    max_tokens: 2048,
+  };
+
+  if (useTools) {
+    const tools = generateToolsParam();
+    if (tools.length > 0) body.tools = tools;
+  }
+
   const response = await fetch(`${config.hackclub.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.hackclub.apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: config.hackclub.model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 2048,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -38,159 +58,168 @@ async function callLLM(messages: LLMMessage[]): Promise<string> {
   }
 
   const data = (await response.json()) as any;
-  const content = data.choices?.[0]?.message?.content;
+  const msg = data.choices?.[0]?.message;
 
-  if (!content) {
+  if (!msg) {
     console.error("[LLM] Empty response:", JSON.stringify(data));
     throw new Error("LLM returned empty response");
   }
 
-  return content.trim();
+  return {
+    content: msg.content?.trim() || null,
+    tool_calls: msg.tool_calls?.length ? msg.tool_calls : undefined,
+  };
 }
 
-/**
- * Processes an incoming WhatsApp message through the full agent loop.
- *
- * 1. Load conversation history
- * 2. Check focus mode context
- * 3. Send to LLM with system prompt + history
- * 4. If LLM outputs a tool call, execute it and loop
- * 5. Send final text response back via WhatsApp
- */
+// ── Typing indicator that stays alive throughout processing ──
+
+function startTypingLoop(number: string): NodeJS.Timeout {
+  sendPresence(number).catch(() => {});
+  return setInterval(() => sendPresence(number).catch(() => {}), 15_000);
+}
+
+// ── Main agent loop ──
+
 export async function processIncomingMessage(senderNumber: string, text: string): Promise<void> {
   const chatId = senderNumber;
-
-  // Save user message
   saveMessage(chatId, "user", text);
 
-  // Show typing indicator
-  await sendPresence(senderNumber);
-
-  // Build message context
-  const systemPrompt = buildSystemPrompt();
-  const history = getHistory(chatId);
-
-  // Add focus mode context if active
-  const focusSession = getActiveFocusSession(chatId);
-  let focusContext = "";
-  if (focusSession) {
-    const remaining = Math.max(
-      0,
-      Math.round((new Date(focusSession.ends_at).getTime() - Date.now()) / 60000)
-    );
-    focusContext = `\n\n[CONTEXT: User is currently in FOCUS MODE on "${focusSession.project}" with ${remaining} minutes remaining. Gently remind them to stay focused unless their message is urgent or task-related.]`;
-  }
-
-  const messages: LLMMessage[] = [
-    { role: "system", content: systemPrompt + focusContext },
-    ...history.map((m) => ({ role: m.role as LLMMessage["role"], content: m.content })),
-  ];
-
-  // Agent loop: LLM -> possibly tool calls -> LLM -> ... -> final text
-  let response: string;
-  let rounds = 0;
+  const typingTimer = startTypingLoop(senderNumber);
 
   try {
-    response = await callLLM(messages);
+    const systemPrompt = buildSystemPrompt();
+    const history = getHistory(chatId);
 
-    while (TOOL_CALL_REGEX.test(response) && rounds < MAX_TOOL_ROUNDS) {
-      rounds++;
-      const match = response.match(TOOL_CALL_REGEX);
-      if (!match) break;
+    const focusSession = getActiveFocusSession(chatId);
+    let focusCtx = "";
+    if (focusSession) {
+      const remaining = Math.max(
+        0,
+        Math.round((new Date(focusSession.ends_at).getTime() - Date.now()) / 60000)
+      );
+      focusCtx = `\n\n[CONTEXT: User is in FOCUS MODE on "${focusSession.project}" — ${remaining} min remaining. Remind them to stay focused unless urgent.]`;
+    }
 
-      let toolCall: { name: string; args: Record<string, any> };
-      try {
-        toolCall = JSON.parse(match[1].trim());
-      } catch {
-        console.error("[Agent] Failed to parse tool call JSON:", match[1]);
-        response = "I tried to use a tool but something went wrong with parsing. Let me try again — could you rephrase?";
+    const messages: LLMMessage[] = [
+      { role: "system", content: systemPrompt + focusCtx },
+      ...history.map((m) => ({ role: m.role as LLMMessage["role"], content: m.content })),
+    ];
+
+    let finalText: string | null = null;
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const resp = await callLLM(messages, true);
+
+      if (!resp.tool_calls || resp.tool_calls.length === 0) {
+        finalText = resp.content;
         break;
       }
 
-      console.log(`[Agent] Tool call #${rounds}: ${toolCall.name}(${JSON.stringify(toolCall.args)})`);
+      if (round === MAX_TOOL_ROUNDS) {
+        finalText = resp.content || "I was doing too many things. What should I focus on?";
+        break;
+      }
 
-      const toolResult = await executeTool(toolCall.name, toolCall.args || {}, chatId);
-      console.log(`[Agent] Tool result: ${toolResult.slice(0, 200)}...`);
+      console.log(`[Agent] Round ${round + 1}: ${resp.tool_calls.length} tool call(s)`);
 
-      // Feed result back to LLM
-      messages.push({ role: "assistant", content: response });
-      messages.push({ role: "user", content: `[Tool Result for ${toolCall.name}]:\n${toolResult}` });
+      messages.push({
+        role: "assistant",
+        content: resp.content,
+        tool_calls: resp.tool_calls,
+      });
 
-      // Update typing indicator
-      await sendPresence(senderNumber);
+      const results = await Promise.all(
+        resp.tool_calls.map(async (tc) => {
+          let args: Record<string, any> = {};
+          try {
+            args = JSON.parse(tc.function.arguments);
+          } catch {
+            console.error(`[Agent] Bad args for ${tc.function.name}: ${tc.function.arguments}`);
+          }
+          console.log(`[Agent] -> ${tc.function.name}(${JSON.stringify(args)})`);
+          const result = await executeTool(tc.function.name, args, chatId);
+          console.log(`[Agent] <- ${tc.function.name}: ${result.slice(0, 200)}`);
+          return { id: tc.id, result };
+        })
+      );
 
-      response = await callLLM(messages);
+      for (const { id, result } of results) {
+        messages.push({ role: "tool", tool_call_id: id, content: result });
+      }
     }
 
-    if (rounds >= MAX_TOOL_ROUNDS && TOOL_CALL_REGEX.test(response)) {
-      response = response.replace(TOOL_CALL_REGEX, "").trim() || "I was trying to do too many things at once. What do you need me to focus on?";
-    }
+    const reply = finalText || "Something went wrong. Try again?";
+    saveMessage(chatId, "assistant", reply);
+    await sendMessage(senderNumber, reply);
   } catch (err: any) {
     console.error("[Agent] Error in agent loop:", err);
-    response = "Something went wrong on my end. Give me a sec and try again.";
+    const errMsg = "Something went wrong on my end. Give me a sec and try again.";
+    saveMessage(chatId, "assistant", errMsg);
+    await sendMessage(senderNumber, errMsg);
+  } finally {
+    clearInterval(typingTimer);
   }
-
-  // Clean any leftover tool call markers from the response
-  response = response.replace(TOOL_CALL_REGEX, "").trim();
-
-  // Save assistant response
-  saveMessage(chatId, "assistant", response);
-
-  // Send via WhatsApp
-  await sendMessage(senderNumber, response);
 }
 
-/**
- * Sends a proactive message (used by the scheduler for reminders, briefs, etc.)
- * Uses the LLM to make the message feel natural, or sends raw text for simple reminders.
- */
+// ── Proactive messages (scheduler) ──
+
 export async function sendProactiveMessage(chatId: string, text: string): Promise<void> {
   saveMessage(chatId, "assistant", text);
   await sendMessage(chatId, text);
 }
 
-/**
- * Sends a proactive message that goes through the LLM first for natural phrasing.
- * Used for daily briefs and reviews where we want AI to format the data nicely.
- */
 export async function sendSmartProactiveMessage(chatId: string, context: string): Promise<void> {
-  const systemPrompt = buildSystemPrompt();
-  const messages: LLMMessage[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: context },
-  ];
-
-  let response: string;
-  let rounds = 0;
+  const typingTimer = startTypingLoop(chatId);
 
   try {
-    response = await callLLM(messages);
+    const systemPrompt = buildSystemPrompt();
+    const messages: LLMMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: context },
+    ];
 
-    // Handle tool calls in proactive messages too
-    while (TOOL_CALL_REGEX.test(response) && rounds < MAX_TOOL_ROUNDS) {
-      rounds++;
-      const match = response.match(TOOL_CALL_REGEX);
-      if (!match) break;
+    let finalText: string | null = null;
 
-      let toolCall: { name: string; args: Record<string, any> };
-      try {
-        toolCall = JSON.parse(match[1].trim());
-      } catch {
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const resp = await callLLM(messages, true);
+
+      if (!resp.tool_calls || resp.tool_calls.length === 0) {
+        finalText = resp.content;
         break;
       }
 
-      const toolResult = await executeTool(toolCall.name, toolCall.args || {}, chatId);
-      messages.push({ role: "assistant", content: response });
-      messages.push({ role: "user", content: `[Tool Result for ${toolCall.name}]:\n${toolResult}` });
-      response = await callLLM(messages);
+      if (round === MAX_TOOL_ROUNDS) {
+        finalText = resp.content || context;
+        break;
+      }
+
+      messages.push({
+        role: "assistant",
+        content: resp.content,
+        tool_calls: resp.tool_calls,
+      });
+
+      const results = await Promise.all(
+        resp.tool_calls.map(async (tc) => {
+          let args: Record<string, any> = {};
+          try { args = JSON.parse(tc.function.arguments); } catch {}
+          return { id: tc.id, result: await executeTool(tc.function.name, args, chatId) };
+        })
+      );
+
+      for (const { id, result } of results) {
+        messages.push({ role: "tool", tool_call_id: id, content: result });
+      }
     }
 
-    response = response.replace(TOOL_CALL_REGEX, "").trim();
+    const reply = finalText || context;
+    saveMessage(chatId, "assistant", reply);
+    await sendMessage(chatId, reply);
   } catch (err) {
     console.error("[Agent] Error in proactive message:", err);
-    response = context;
+    saveMessage(chatId, "assistant", context);
+    await sendMessage(chatId, context);
+  } finally {
+    clearInterval(typingTimer);
   }
-
-  saveMessage(chatId, "assistant", response);
-  await sendMessage(chatId, response);
 }

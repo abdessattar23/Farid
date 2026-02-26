@@ -5,7 +5,7 @@ export interface ChatMessage {
   content: string;
 }
 
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 10;
 
 /**
  * Appends a message to the conversation history for a given chat.
