@@ -9,47 +9,59 @@ export const webhookRouter = Router();
  * We only care about MESSAGES_UPSERT for incoming messages.
  */
 webhookRouter.post("/webhook", async (req: Request, res: Response) => {
-  // Respond immediately so Evolution API doesn't retry
   res.sendStatus(200);
 
   try {
     const body = req.body;
 
-    if (!body || !body.data) return;
+    console.log(`[Webhook] POST /webhook received | event=${body?.event} | hasData=${!!body?.data}`);
 
-    // Only process MESSAGES_UPSERT events
+    if (!body || !body.data) {
+      console.log("[Webhook] Dropped: missing body or body.data");
+      return;
+    }
+
     const event = body.event;
-    if (event !== "messages.upsert") return;
+    if (event !== "messages.upsert") {
+      console.log(`[Webhook] Skipped: event="${event}" (not messages.upsert)`);
+      return;
+    }
 
     const data = body.data;
     const key = data.key;
     const messageContent = data.message;
 
-    if (!key || !messageContent) return;
-
-    // Skip messages sent by us
-    if (key.fromMe) return;
-
-    // Skip group messages -- only respond to direct messages
-    if (key.remoteJid?.endsWith("@g.us")) return;
-
-    // Extract sender number (remove @s.whatsapp.net suffix)
-    const senderJid: string = key.remoteJid || "";
-    const senderNumber = senderJid.replace("@s.whatsapp.net", "");
-
-    // Only respond to the owner
-    if (senderNumber !== config.agent.ownerNumber) {
-      console.log(`[Webhook] Ignoring message from non-owner: ${senderNumber}`);
+    if (!key || !messageContent) {
+      console.log("[Webhook] Dropped: missing key or message in data");
       return;
     }
 
-    // Extract text from various message types
+    if (key.fromMe) {
+      console.log("[Webhook] Skipped: fromMe=true");
+      return;
+    }
+
+    if (key.remoteJid?.endsWith("@g.us")) {
+      console.log(`[Webhook] Skipped: group message (${key.remoteJid})`);
+      return;
+    }
+
+    const senderJid: string = key.remoteJid || "";
+    const senderNumber = senderJid.replace("@s.whatsapp.net", "");
+
+    if (senderNumber !== config.agent.ownerNumber) {
+      console.log(`[Webhook] Ignored: sender=${senderNumber} owner=${config.agent.ownerNumber}`);
+      return;
+    }
+
     const text = extractText(messageContent);
-    if (!text) return;
+    if (!text) {
+      console.log("[Webhook] Dropped: could not extract text from message");
+      return;
+    }
 
-    console.log(`[Webhook] Incoming from ${senderNumber}: ${text.slice(0, 100)}...`);
+    console.log(`[Webhook] Processing from ${senderNumber}: ${text.slice(0, 100)}`);
 
-    // Process asynchronously
     processIncomingMessage(senderNumber, text).catch((err) => {
       console.error("[Webhook] Error processing message:", err);
     });

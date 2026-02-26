@@ -9,8 +9,24 @@ import "./tools";
 
 const app = express();
 
-// Parse JSON bodies from Evolution API webhooks
-app.use(express.json({ limit: "10mb" }));
+// Log every incoming request before anything else
+app.use((req, _res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.url} | Content-Type: ${req.headers["content-type"]} | Content-Length: ${req.headers["content-length"]}`);
+  next();
+});
+
+// Parse JSON bodies -- also accept requests without Content-Type header
+app.use(express.json({ limit: "10mb", type: ["application/json", "text/*"] }));
+
+// Catch JSON parse errors
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.type === "entity.parse.failed") {
+    console.error("[HTTP] JSON parse error:", err.message);
+    res.status(400).json({ error: "Invalid JSON" });
+    return;
+  }
+  next(err);
+});
 
 // Mount routes
 app.use(webhookRouter);
