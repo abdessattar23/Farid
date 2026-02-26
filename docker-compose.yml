@@ -1,10 +1,9 @@
 services:
   farid:
     build: .
-    container_name: farid
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+    expose:
+      - "3000"
     environment:
       - EVOLUTION_API_URL=${EVOLUTION_API_URL}
       - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE}
