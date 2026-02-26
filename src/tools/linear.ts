@@ -102,7 +102,8 @@ registerTool({
   },
   async execute(args) {
     const teamId = await getTeamId();
-    const input: any = { title: args.title, teamId };
+    const viewerId = await getViewerId();
+    const input: any = { title: args.title, teamId, assigneeId: viewerId };
 
     if (args.description) input.description = args.description;
     if (args.priority) input.priority = Number(args.priority);
