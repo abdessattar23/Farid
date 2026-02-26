@@ -1,0 +1,29 @@
+services:
+  farid:
+    build: .
+    container_name: farid
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL}
+      - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE}
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+      - HACKCLUB_API_KEY=${HACKCLUB_API_KEY}
+      - HACKCLUB_MODEL=${HACKCLUB_MODEL:-qwen/qwen3-32b}
+      - LINEAR_API_KEY=${LINEAR_API_KEY}
+      - OWNER_NUMBER=${OWNER_NUMBER}
+      - PORT=3000
+      - TIMEZONE=${TIMEZONE:-Africa/Casablanca}
+      - DB_PATH=/data/farid.db
+    volumes:
+      - farid_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  farid_data:

@@ -219,20 +219,45 @@ Farid uses **prompt-based tool calling** — the LLM outputs structured JSON in 
 > You: I'm about to scroll Instagram
 > Farid: Stop. You have 2 urgent tasks waiting. [SOF-15] needs you. Put the phone down and open your IDE. You got this.
 
-## Deployment on Coolify
+## Deployment
 
-Farid includes a Dockerfile and is ready for Coolify deployment. Deploy it alongside your Evolution API on the same Coolify instance.
+### Docker Compose (recommended)
 
-### Step-by-step
+1. **Configure environment** — copy `.env.example` to `.env` and fill in your values:
+   ```bash
+   cp .env.example .env
+   ```
 
-1. **Push to a Git repo** (GitHub, GitLab, etc.) — Coolify deploys from Git.
+2. **Run**:
+   ```bash
+   docker compose up -d
+   ```
 
-2. **In Coolify**, create a new resource:
-   - Click **"Add New Resource"** → **"Application"**
-   - Select your server and connect your Git repo
-   - Coolify will detect the Dockerfile automatically
+3. **Check health**:
+   ```bash
+   curl http://localhost:3000/health
+   ```
 
-3. **Set environment variables** in the Coolify UI (Settings → Environment Variables):
+4. **View logs**:
+   ```bash
+   docker compose logs -f farid
+   ```
+
+5. **Stop**:
+   ```bash
+   docker compose down
+   ```
+
+Data (conversations, reminders) is persisted in a Docker volume (`farid_data`) and survives restarts and rebuilds.
+
+### Coolify
+
+Coolify natively supports Docker Compose deployments:
+
+1. In Coolify, click **"Add New Resource"** → **"Docker Compose"**
+2. Connect your Git repo (`https://github.com/abdessattar23/Farid.git`)
+3. Coolify will detect `docker-compose.yml` automatically
+4. Set your environment variables in the Coolify UI (Settings → Environment Variables):
    ```
    EVOLUTION_API_URL=https://your-evolution-api.example.com
    EVOLUTION_INSTANCE=farid
@@ -241,37 +266,31 @@ Farid includes a Dockerfile and is ready for Coolify deployment. Deploy it along
    HACKCLUB_MODEL=qwen/qwen3-32b
    LINEAR_API_KEY=lin_api_xxxxx
    OWNER_NUMBER=212xxxxxxxxx
-   PORT=3000
    TIMEZONE=Africa/Casablanca
    ```
+5. Deploy — the volume is handled automatically by the compose file
+6. Assign a domain in Coolify (e.g., `farid.yourdomain.com`) and point it to port `3000`
 
-4. **Add a persistent volume** in Coolify (Settings → Storages):
-   - Source path: `/data/coolify/farid` (or any path on host)
-   - Destination path: `/data`
-   - This keeps your SQLite database (conversations, reminders) safe across deploys
+### Configure Evolution API Webhook
 
-5. **Set the port** to `3000` in Coolify (Settings → Network)
+Once Farid is running with a public URL, set the webhook:
 
-6. **Deploy** — Coolify will build the Docker image and start the container
+```bash
+curl -X POST https://your-evolution-api.com/webhook/set/farid \
+  -H "apikey: YOUR_EVOLUTION_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://farid.yourdomain.com/webhook",
+    "webhook_by_events": false,
+    "webhook_base64": false,
+    "events": ["MESSAGES_UPSERT"]
+  }'
+```
 
-7. **Configure the webhook** — Once Farid has a public URL from Coolify (e.g., `https://farid.yourdomain.com`), set the Evolution API webhook:
-   ```bash
-   curl -X POST https://your-evolution-api.com/webhook/set/farid \
-     -H "apikey: YOUR_EVOLUTION_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "url": "https://farid.yourdomain.com/webhook",
-       "webhook_by_events": false,
-       "webhook_base64": false,
-       "events": ["MESSAGES_UPSERT"]
-     }'
-   ```
-
-8. **Verify** — Visit `https://farid.yourdomain.com/health` to confirm Farid is running, then send a WhatsApp message!
+Verify at `https://farid.yourdomain.com/health`, then send a WhatsApp message.
 
 ### Local Development
 
-For local development with hot reload:
 ```bash
 cp .env.example .env   # fill in your values
 npm install
