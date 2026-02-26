@@ -5,23 +5,25 @@ import { processIncomingMessage } from "./agent";
 export const webhookRouter = Router();
 
 /**
- * Evolution API sends webhook events here.
- * We only care about MESSAGES_UPSERT for incoming messages.
+ * Evolution API appends the event name to the webhook URL path
+ * (e.g. /webhook/messages-upsert), so we match /webhook/* as well.
  */
-webhookRouter.post("/webhook", async (req: Request, res: Response) => {
+webhookRouter.post("/webhook/:event?", async (req: Request, res: Response) => {
   res.sendStatus(200);
 
   try {
     const body = req.body;
+    const pathEvent = req.params.event;
 
-    console.log(`[Webhook] POST /webhook received | event=${body?.event} | hasData=${!!body?.data}`);
+    console.log(`[Webhook] POST ${req.path} | pathEvent=${pathEvent} | bodyEvent=${body?.event} | hasData=${!!body?.data}`);
 
     if (!body || !body.data) {
       console.log("[Webhook] Dropped: missing body or body.data");
       return;
     }
 
-    const event = body.event;
+    // Event comes from body or from URL path (messages-upsert → messages.upsert)
+    const event = body.event || (typeof pathEvent === "string" ? pathEvent.replace("-", ".") : undefined);
     if (event !== "messages.upsert") {
       console.log(`[Webhook] Skipped: event="${event}" (not messages.upsert)`);
       return;
