@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { saveMessage, getHistory } from "./memory/conversation";
+import { getLatestSummary, summarizeOldMessages } from "./memory/summarizer";
 import { buildSystemPrompt } from "./prompt";
 import { executeTool, generateToolsParam } from "./tools";
 import { sendMessage, sendPresence } from "./whatsapp";
@@ -90,20 +91,32 @@ export async function processIncomingMessage(senderNumber: string, text: string)
     const systemPrompt = buildSystemPrompt();
     const history = getHistory(chatId);
 
+    // Build additional context
+    const ctxParts: string[] = [];
+
     const focusSession = getActiveFocusSession(chatId);
-    let focusCtx = "";
     if (focusSession) {
       const remaining = Math.max(
         0,
         Math.round((new Date(focusSession.ends_at).getTime() - Date.now()) / 60000)
       );
-      focusCtx = `\n\n[CONTEXT: User is in FOCUS MODE on "${focusSession.project}" — ${remaining} min remaining. Remind them to stay focused unless urgent.]`;
+      ctxParts.push(`[FOCUS MODE: "${focusSession.project}" — ${remaining} min remaining. Remind them to stay focused unless urgent.]`);
     }
 
+    const summary = getLatestSummary(chatId);
+    if (summary) {
+      ctxParts.push(`[CONVERSATION MEMORY — summary of past interactions:]\n${summary}`);
+    }
+
+    const contextBlock = ctxParts.length > 0 ? "\n\n" + ctxParts.join("\n\n") : "";
+
     const messages: LLMMessage[] = [
-      { role: "system", content: systemPrompt + focusCtx },
+      { role: "system", content: systemPrompt + contextBlock },
       ...history.map((m) => ({ role: m.role as LLMMessage["role"], content: m.content })),
     ];
+
+    // Trigger background summarization if history is getting long
+    summarizeOldMessages(chatId).catch(() => {});
 
     let finalText: string | null = null;
 

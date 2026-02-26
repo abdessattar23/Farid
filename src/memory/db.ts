@@ -62,6 +62,76 @@ function initTables(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_productivity_log_chat
       ON productivity_log(chat_id, created_at);
+
+    -- Long-term memory / knowledge base
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      project TEXT,
+      tags TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notes_chat
+      ON notes(chat_id, created_at);
+
+    -- Daily accountability journal
+    CREATE TABLE IF NOT EXISTS journal (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      wins TEXT,
+      blockers TEXT,
+      mood TEXT,
+      rating INTEGER,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_journal_chat
+      ON journal(chat_id, created_at);
+
+    -- Conversation session summaries
+    CREATE TABLE IF NOT EXISTS session_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_summaries_chat
+      ON session_summaries(chat_id, created_at);
+
+    -- Habit definitions
+    CREATE TABLE IF NOT EXISTS habits (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      frequency TEXT NOT NULL DEFAULT 'daily',
+      current_streak INTEGER NOT NULL DEFAULT 0,
+      best_streak INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_habits_chat
+      ON habits(chat_id, active);
+
+    -- Habit completion log
+    CREATE TABLE IF NOT EXISTS habit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      habit_id TEXT NOT NULL,
+      completed_date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(habit_id, completed_date)
+    );
+
+    -- Last message timestamp for silence detection
+    CREATE TABLE IF NOT EXISTS chat_meta (
+      chat_id TEXT PRIMARY KEY,
+      last_message_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 

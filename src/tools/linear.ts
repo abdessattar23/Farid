@@ -4,8 +4,6 @@ import { registerTool } from "./registry";
 
 const linear = new LinearClient({ apiKey: config.linear.apiKey });
 
-const PROJECT_LABELS = ["Sofrecom", "YouCode", "Hack-Nation", "HR Platform", "Learning"];
-
 // ─── Cached helpers (TTL: 10 min) ───
 
 const CACHE_TTL = 10 * 60 * 1000;
@@ -16,6 +14,7 @@ const cache = {
   teamId: null as CacheEntry<string> | null,
   states: new Map<string, CacheEntry<Map<string, string>>>(),
   labels: new Map<string, CacheEntry<string>>(),
+  allLabelNames: null as CacheEntry<string[]> | null,
   viewerId: null as CacheEntry<string> | null,
 };
 
@@ -64,6 +63,14 @@ async function findCompletedStateId(teamId: string): Promise<string | undefined>
   return states.nodes[0]?.id;
 }
 
+async function getAllLabelNames(): Promise<string[]> {
+  if (isValid(cache.allLabelNames)) return cache.allLabelNames.value;
+  const labels = await linear.issueLabels({ first: 100 });
+  const names = labels.nodes.map((l) => l.name);
+  cache.allLabelNames = { value: names, expires: Date.now() + CACHE_TTL };
+  return names;
+}
+
 async function findOrCreateLabel(name: string): Promise<string> {
   const cached = cache.labels.get(name);
   if (isValid(cached)) return cached.value;
@@ -91,7 +98,7 @@ registerTool({
     title: { type: "string", description: "Task title", required: true },
     description: { type: "string", description: "Task description (markdown supported)" },
     priority: { type: "number", description: "1=urgent, 2=high, 3=medium, 4=low" },
-    project: { type: "string", description: "Project label", enum: PROJECT_LABELS },
+    project: { type: "string", description: "Project label (use list_projects to see available labels)" },
   },
   async execute(args) {
     const teamId = await getTeamId();
@@ -115,7 +122,7 @@ registerTool({
   name: "list_my_tasks",
   description: "List your open tasks from Linear, optionally filtered by project or priority",
   parameters: {
-    project: { type: "string", description: "Filter by project label", enum: PROJECT_LABELS },
+    project: { type: "string", description: "Filter by project label (use list_projects to see available labels)" },
     priority: { type: "number", description: "Filter by priority (1-4)" },
     limit: { type: "number", description: "Max results (default 15)" },
   },
@@ -233,6 +240,17 @@ registerTool({
 });
 
 registerTool({
+  name: "list_projects",
+  description: "List all available project labels from Linear — use this to discover valid project names before filtering",
+  parameters: {},
+  async execute() {
+    const names = await getAllLabelNames();
+    if (names.length === 0) return "No labels found in your Linear workspace.";
+    return `Available project labels (${names.length}):\n${names.map((n) => `• ${n}`).join("\n")}`;
+  },
+});
+
+registerTool({
   name: "get_task_summary",
   description: "Get a summary of all tasks grouped by project and status — useful for daily briefs",
   parameters: {},
@@ -258,7 +276,7 @@ registerTool({
     for (let i = 0; i < issues.nodes.length; i++) {
       const issue = issues.nodes[i];
       const labels = labelResults[i];
-      const projectLabel = labels.nodes.find((l) => PROJECT_LABELS.includes(l.name))?.name || "Other";
+      const projectLabel = labels.nodes[0]?.name || "Unlabeled";
 
       if (!byProject[projectLabel]) {
         byProject[projectLabel] = { urgent: 0, high: 0, medium: 0, low: 0, total: 0 };

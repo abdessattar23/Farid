@@ -7,14 +7,24 @@ export interface ChatMessage {
 
 const MAX_HISTORY = 10;
 
-/**
- * Appends a message to the conversation history for a given chat.
- */
 export function saveMessage(chatId: string, role: ChatMessage["role"], content: string): void {
   const db = getDb();
   db.prepare(
     "INSERT INTO conversations (chat_id, role, content) VALUES (?, ?, ?)"
   ).run(chatId, role, content);
+
+  // Track last message timestamp for silence detection
+  if (role === "user") {
+    db.prepare(
+      "INSERT INTO chat_meta (chat_id, last_message_at) VALUES (?, datetime('now')) ON CONFLICT(chat_id) DO UPDATE SET last_message_at = datetime('now')"
+    ).run(chatId);
+  }
+}
+
+export function getLastMessageTime(chatId: string): Date | null {
+  const db = getDb();
+  const row = db.prepare("SELECT last_message_at FROM chat_meta WHERE chat_id = ?").get(chatId) as any;
+  return row ? new Date(row.last_message_at) : null;
 }
 
 /**

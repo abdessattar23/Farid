@@ -155,6 +155,86 @@ registerTool({
   },
 });
 
+registerTool({
+  name: "productivity_score",
+  description: "Calculate a productivity score (0-100) based on focus time, habits, journal entries, and activity this week. Shows trend.",
+  parameters: {},
+  async execute(_args, chatId) {
+    const db = getDb();
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    const prevWeekStart = new Date(Date.now() - 14 * 86400000).toISOString();
+
+    function weekScore(from: string, to: string): number {
+      let score = 0;
+
+      // Focus time (max 40 points: 10h = 40pts)
+      const focus = db.prepare(
+        "SELECT SUM(duration_minutes) as total FROM focus_sessions WHERE chat_id = ? AND started_at >= ? AND started_at < ? AND active = 0"
+      ).get(chatId, from, to) as any;
+      const focusMin = focus?.total || 0;
+      score += Math.min(40, Math.round((focusMin / 600) * 40));
+
+      // Habits completed (max 25 points: 7 days all habits = 25pts)
+      const habitDays = db.prepare(
+        "SELECT COUNT(DISTINCT completed_date) as days FROM habit_log hl JOIN habits h ON hl.habit_id = h.id WHERE h.chat_id = ? AND hl.completed_date >= ? AND hl.completed_date < ?"
+      ).get(chatId, from.split("T")[0], to.split("T")[0]) as any;
+      score += Math.min(25, Math.round(((habitDays?.days || 0) / 7) * 25));
+
+      // Journal entries (max 15 points: 5 entries = 15pts)
+      const journals = db.prepare(
+        "SELECT COUNT(*) as cnt FROM journal WHERE chat_id = ? AND created_at >= ? AND created_at < ?"
+      ).get(chatId, from, to) as any;
+      score += Math.min(15, Math.round(((journals?.cnt || 0) / 5) * 15));
+
+      // Focus sessions count (max 20 points: 10 sessions = 20pts)
+      const sessionCount = db.prepare(
+        "SELECT COUNT(*) as cnt FROM focus_sessions WHERE chat_id = ? AND started_at >= ? AND started_at < ? AND active = 0"
+      ).get(chatId, from, to) as any;
+      score += Math.min(20, Math.round(((sessionCount?.cnt || 0) / 10) * 20));
+
+      return Math.min(100, score);
+    }
+
+    const now = new Date().toISOString();
+    const current = weekScore(weekAgo, now);
+    const previous = weekScore(prevWeekStart, weekAgo);
+    const diff = current - previous;
+    const trend = diff > 0 ? `+${diff} from last week` : diff < 0 ? `${diff} from last week` : "same as last week";
+
+    let emoji = "📊";
+    if (current >= 80) emoji = "🔥";
+    else if (current >= 60) emoji = "💪";
+    else if (current >= 40) emoji = "📈";
+    else emoji = "🐌";
+
+    return `${emoji} Productivity Score: ${current}/100 (${trend})\n\nBreakdown: Focus time (40pts), Habits (25pts), Journal (15pts), Sessions (20pts)`;
+  },
+});
+
+registerTool({
+  name: "start_sprint",
+  description: "Start a 5-minute anti-procrastination sprint. Do ONE small thing, then Farid checks back.",
+  parameters: {
+    task: { type: "string", description: "What to work on for 5 minutes", required: true },
+  },
+  async execute(args, chatId) {
+    const db = getDb();
+    const { v4: uuidv4Sprint } = await import("uuid");
+    const id = uuidv4Sprint();
+    const triggerAt = new Date(Date.now() + 5 * 60000).toISOString();
+
+    db.prepare(
+      "INSERT INTO reminders (id, chat_id, message, trigger_at) VALUES (?, ?, ?, ?)"
+    ).run(id, chatId, `⚡ Sprint check-in: How did 5 minutes on "${args.task}" go? Did you get started?`, triggerAt);
+
+    db.prepare(
+      "INSERT INTO productivity_log (chat_id, event_type, project, details) VALUES (?, 'sprint_start', NULL, ?)"
+    ).run(chatId, args.task);
+
+    return `⚡ *5-MINUTE SPRINT STARTED*\n\nTask: "${args.task}"\n\nJust do ONE thing. Don't think, don't plan, just start. I'll check back in 5 minutes. Go!`;
+  },
+});
+
 // ─── Exported helpers for the scheduler ───
 
 /**
