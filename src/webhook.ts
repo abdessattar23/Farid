@@ -6,14 +6,14 @@ export const webhookRouter = Router();
 
 /**
  * Evolution API appends the event name to the webhook URL path
- * (e.g. /webhook/messages-upsert), so we match /webhook/* as well.
+ * (e.g. /webhook/messages-upsert), so we handle both paths.
  */
-webhookRouter.post("/webhook/:event?", async (req: Request, res: Response) => {
+async function handleWebhook(req: Request, res: Response) {
   res.sendStatus(200);
 
   try {
     const body = req.body;
-    const pathEvent = req.params.event;
+    const pathEvent = req.params?.event;
 
     console.log(`[Webhook] POST ${req.path} | pathEvent=${pathEvent} | bodyEvent=${body?.event} | hasData=${!!body?.data}`);
 
@@ -22,7 +22,6 @@ webhookRouter.post("/webhook/:event?", async (req: Request, res: Response) => {
       return;
     }
 
-    // Event comes from body or from URL path (messages-upsert → messages.upsert)
     const event = body.event || (typeof pathEvent === "string" ? pathEvent.replace("-", ".") : undefined);
     if (event !== "messages.upsert") {
       console.log(`[Webhook] Skipped: event="${event}" (not messages.upsert)`);
@@ -70,7 +69,10 @@ webhookRouter.post("/webhook/:event?", async (req: Request, res: Response) => {
   } catch (err) {
     console.error("[Webhook] Error handling webhook:", err);
   }
-});
+}
+
+webhookRouter.post("/webhook", handleWebhook);
+webhookRouter.post("/webhook/:event", handleWebhook);
 
 /**
  * Health check endpoint.
