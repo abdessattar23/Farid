@@ -24,8 +24,11 @@ export async function executeTool(name: string, args: Record<string, any>, chatI
   try {
     return await tool.execute(args, chatId);
   } catch (err: any) {
-    console.error(`[Tool] Error executing ${name}:`, err);
-    return `Error executing ${name}: ${err.message || String(err)}`;
+    // Extract a clean short error message — Linear SDK dumps entire GraphQL queries
+    const raw = err.message || String(err);
+    const clean = raw.split("\n")[0].slice(0, 200);
+    console.error(`[Tool] Error executing ${name}: ${clean}`);
+    return `Error executing ${name}: ${clean}`;
   }
 }
 
