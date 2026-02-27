@@ -48,7 +48,7 @@ export async function sendVoiceMessage(number: string, text: string): Promise<vo
       },
       body: JSON.stringify({
         number,
-        audio: `data:audio/mp3;base64,${audioBase64}`,
+        audio: audioBase64,
         delay: 1000,
       }),
     });
