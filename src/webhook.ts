@@ -36,9 +36,19 @@ async function handleWebhook(req: Request, res: Response) {
     let text = extractText(messageContent);
     let isVoice = false;
 
-    // Voice notes (pttMessage) and audio files (audioMessage)
-    if (!text && (messageContent.pttMessage || messageContent.audioMessage)) {
-      console.log("[Webhook] Voice/audio message detected, transcribing...");
+    // Log message type for debugging media messages
+    if (!text) {
+      const msgType = messageContent.messageType || Object.keys(messageContent).filter((k: string) => k.endsWith("Message") || k === "pttMessage").join(", ");
+      console.log(`[Webhook] Non-text message. Keys: ${msgType || Object.keys(messageContent).slice(0, 5).join(", ")}`);
+    }
+
+    // Voice notes and audio files — check both message content and data.messageType
+    const dataMessageType = data.messageType;
+    const hasAudio = messageContent.pttMessage || messageContent.audioMessage
+      || dataMessageType === "pttMessage" || dataMessageType === "audioMessage";
+
+    if (!text && hasAudio) {
+      console.log(`[Webhook] Audio detected (type: ${dataMessageType || "from content"}), transcribing...`);
       text = await transcribeAudio(key);
       if (text) {
         isVoice = true;
