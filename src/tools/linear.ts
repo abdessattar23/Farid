@@ -98,7 +98,7 @@ registerTool({
     title: { type: "string", description: "Task title", required: true },
     description: { type: "string", description: "Task description (markdown supported)" },
     priority: { type: "number", description: "1=urgent, 2=high, 3=medium, 4=low" },
-    project: { type: "string", description: "Project label (use list_projects to see available labels)" },
+    project: { type: "string", description: "Project label: Sofrecom, YouCode, Hack-Nation, HR Platform, or Learning" },
   },
   async execute(args) {
     const teamId = await getTeamId();
@@ -123,7 +123,7 @@ registerTool({
   name: "list_my_tasks",
   description: "List your open tasks from Linear, optionally filtered by project or priority",
   parameters: {
-    project: { type: "string", description: "Filter by project label (use list_projects to see available labels)" },
+    project: { type: "string", description: "Filter by project label: Sofrecom, YouCode, Hack-Nation, HR Platform, or Learning" },
     priority: { type: "number", description: "Filter by priority (1-4)" },
     limit: { type: "number", description: "Max results (default 15)" },
   },

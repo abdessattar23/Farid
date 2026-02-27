@@ -28,6 +28,18 @@ interface LLMResponseMessage {
   tool_calls?: ToolCallPart[];
 }
 
+// ── Strip Qwen3 thinking artifacts from model output ──
+
+function cleanThinking(text: string | null): string | null {
+  if (!text) return null;
+  let cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^(analysis|assistantcommentary|commentary|reasoning)[\s\S]*?(?=\n[A-Z]|\n\n|$)/gim, "")
+    .replace(/to=functions\.\w+\s*json\s*\{[^}]*\}/gi, "")
+    .trim();
+  return cleaned || null;
+}
+
 // ── LLM caller ──
 
 async function callLLM(messages: LLMMessage[], useTools = true): Promise<LLMResponseMessage> {
@@ -67,7 +79,7 @@ async function callLLM(messages: LLMMessage[], useTools = true): Promise<LLMResp
   }
 
   return {
-    content: msg.content?.trim() || null,
+    content: cleanThinking(msg.content?.trim() || null),
     tool_calls: msg.tool_calls?.length ? msg.tool_calls : undefined,
   };
 }
@@ -119,9 +131,13 @@ export async function processIncomingMessage(senderNumber: string, text: string)
     summarizeOldMessages(chatId).catch(() => {});
 
     let finalText: string | null = null;
+    let lastContent: string | null = null;
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const resp = await callLLM(messages, true);
+
+      // Track the last non-empty content for fallback
+      if (resp.content) lastContent = resp.content;
 
       if (!resp.tool_calls || resp.tool_calls.length === 0) {
         finalText = resp.content;
@@ -129,7 +145,7 @@ export async function processIncomingMessage(senderNumber: string, text: string)
       }
 
       if (round === MAX_TOOL_ROUNDS) {
-        finalText = resp.content || "I was doing too many things. What should I focus on?";
+        finalText = resp.content || lastContent || "I was doing too many things. What should I focus on?";
         break;
       }
 
@@ -161,7 +177,14 @@ export async function processIncomingMessage(senderNumber: string, text: string)
       }
     }
 
-    const reply = finalText || "Something went wrong. Try again?";
+    // If content is empty after cleaning, make one final call without tools to get a clean response
+    if (!finalText) {
+      console.log("[Agent] Empty response after tool rounds, making final call without tools");
+      const fallback = await callLLM(messages, false);
+      finalText = fallback.content;
+    }
+
+    const reply = finalText || "Done! Let me know what's next.";
     saveMessage(chatId, "assistant", reply);
     await sendMessage(senderNumber, reply);
   } catch (err: any) {
@@ -223,6 +246,11 @@ export async function sendSmartProactiveMessage(chatId: string, context: string)
       for (const { id, result } of results) {
         messages.push({ role: "tool", tool_call_id: id, content: result });
       }
+    }
+
+    if (!finalText) {
+      const fallback = await callLLM(messages, false);
+      finalText = fallback.content;
     }
 
     const reply = finalText || context;
