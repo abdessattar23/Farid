@@ -59,7 +59,8 @@ export async function sendVoiceMessage(number: string, text: string): Promise<vo
     });
 
     if (!response.ok) {
-      console.error(`[WhatsApp] Voice send failed: ${response.status}, falling back to text`);
+      const errBody = await response.text();
+      console.error(`[WhatsApp] Voice send failed: ${response.status} ${errBody}`);
       return sendMessage(number, text);
     }
 
