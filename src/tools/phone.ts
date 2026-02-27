@@ -7,6 +7,33 @@ const supabase = createClient(config.supabase.url, config.supabase.anonKey);
 
 type ParamDef = Record<string, { type: string; description: string; required?: boolean; enum?: string[] }>;
 
+const POLL_INTERVAL_MS = 500;
+const POLL_TIMEOUT_MS = 15_000;
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitForAck(commandId: string): Promise<{ status: string; message: string; device_info?: any }> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const { data, error } = await supabase
+      .from("command_acks")
+      .select("status, message, device_info")
+      .eq("command_id", commandId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw new Error(`Ack poll failed: ${error.message}`);
+    if (data) return data;
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  return { status: "timeout", message: "Device did not respond within 15 seconds" };
+}
+
 async function sendCommand(type: string, params?: Record<string, any>): Promise<string> {
   const commandId = uuidv4();
   const body: Record<string, any> = { type, command_id: commandId };
@@ -18,7 +45,13 @@ async function sendCommand(type: string, params?: Record<string, any>): Promise<
   });
 
   if (error) throw new Error(`Supabase insert failed: ${error.message}`);
-  return commandId;
+
+  const ack = await waitForAck(commandId);
+
+  if (ack.device_info) {
+    return `[${ack.status}] ${ack.message}\nDevice info: ${JSON.stringify(ack.device_info)}`;
+  }
+  return `[${ack.status}] ${ack.message}`;
 }
 
 interface CommandDef {
@@ -221,8 +254,7 @@ for (const cmd of commands) {
     parameters: cmd.parameters,
     async execute(args) {
       const params = cmd.mapArgs ? cmd.mapArgs(args) : { ...args };
-      const commandId = await sendCommand(cmd.command, Object.keys(params).length > 0 ? params : undefined);
-      return `Phone command "${cmd.command}" sent (id: ${commandId})`;
+      return await sendCommand(cmd.command, Object.keys(params).length > 0 ? params : undefined);
     },
   });
 }
