@@ -106,7 +106,7 @@ async function downloadMedia(messageKey: any): Promise<string | null> {
 async function transcribeWithGroq(audioBuffer: Buffer): Promise<string | null> {
   try {
     const formData = new FormData();
-    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("file", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
     formData.append("model", "whisper-large-v3");
     formData.append("language", "ar");
 
@@ -134,7 +134,7 @@ async function transcribeWithGroq(audioBuffer: Buffer): Promise<string | null> {
 async function transcribeWithHackClub(audioBuffer: Buffer): Promise<string | null> {
   try {
     const formData = new FormData();
-    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("file", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
     formData.append("model", "whisper-1");
 
     const resp = await fetch(`${config.hackclub.baseUrl}/audio/transcriptions`, {
