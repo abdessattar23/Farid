@@ -96,6 +96,37 @@ async function textToSpeech(text: string): Promise<string | null> {
   return Buffer.from(arrayBuffer).toString("base64");
 }
 
+/**
+ * Sends an image to a WhatsApp number. Media can be a URL or base64 string.
+ */
+export async function sendImage(number: string, media: string, caption = "", mimetype = "image/png"): Promise<void> {
+  const isUrl = media.startsWith("http://") || media.startsWith("https://");
+  const ext = mimetype.split("/")[1] || "png";
+
+  const response = await fetch(`${apiUrl}/message/sendMedia/${instance}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: apiKey,
+    },
+    body: JSON.stringify({
+      number,
+      mediatype: "Image",
+      mimetype,
+      media: isUrl ? media : media.replace(/^data:image\/\w+;base64,/, ""),
+      fileName: `image.${ext}`,
+      caption: caption || " ",
+      delay: 1000,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    console.error(`[WhatsApp] Image send failed: ${response.status} ${body}`);
+    throw new Error(`Evolution API error: ${response.status}`);
+  }
+}
+
 export async function sendPresence(number: string, presence: "composing" | "paused" = "composing"): Promise<void> {
   try {
     await fetch(`${apiUrl}/chat/sendPresence/${instance}`, {

@@ -1,3 +1,13 @@
+/**
+ * Android phone remote control via Supabase.
+ *
+ * Response flow:
+ * 1. Insert command into `notifications` table (title, body JSON with type, command_id, params)
+ * 2. Android app receives via Realtime or polling, executes command
+ * 3. App writes result to `command_acks` table (command_id, status, message, device_info)
+ * 4. We poll command_acks for matching command_id until response or 15s timeout
+ * 5. Return status + message (+ device_info if present) to the LLM
+ */
 import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 import { config } from "../config";
