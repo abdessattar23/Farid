@@ -13,6 +13,7 @@ async function sendCommand(type: string, params?: Record<string, any>): Promise<
   if (params && Object.keys(params).length > 0) body.params = params;
 
   const { error } = await supabase.from("notifications").insert({
+    title: "phone_command",
     body: JSON.stringify(body),
   });
 
