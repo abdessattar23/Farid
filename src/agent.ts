@@ -3,7 +3,7 @@ import { saveMessage, getHistory } from "./memory/conversation";
 import { getLatestSummary, summarizeOldMessages } from "./memory/summarizer";
 import { buildSystemPrompt } from "./prompt";
 import { executeTool, generateToolsParam } from "./tools";
-import { sendMessage, sendPresence } from "./whatsapp";
+import { sendMessage, sendVoiceMessage, sendPresence } from "./whatsapp";
 import { getActiveFocusSession } from "./tools/productivity";
 
 const MAX_TOOL_ROUNDS = 10;
@@ -93,7 +93,7 @@ function startTypingLoop(number: string): NodeJS.Timeout {
 
 // ── Main agent loop ──
 
-export async function processIncomingMessage(senderNumber: string, text: string): Promise<void> {
+export async function processIncomingMessage(senderNumber: string, text: string, isVoice = false): Promise<void> {
   const chatId = senderNumber;
   saveMessage(chatId, "user", text);
 
@@ -186,7 +186,13 @@ export async function processIncomingMessage(senderNumber: string, text: string)
 
     const reply = finalText || "Done! Let me know what's next.";
     saveMessage(chatId, "assistant", reply);
-    await sendMessage(senderNumber, reply);
+
+    // Voice in → voice out
+    if (isVoice) {
+      await sendVoiceMessage(senderNumber, reply);
+    } else {
+      await sendMessage(senderNumber, reply);
+    }
   } catch (err: any) {
     console.error("[Agent] Error in agent loop:", err);
     const errMsg = "Something went wrong on my end. Give me a sec and try again.";

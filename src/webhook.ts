@@ -6,6 +6,8 @@ export const webhookRouter = Router();
 
 const { apiUrl, instance, apiKey } = config.evolution;
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
+const STT_PROVIDER = process.env.STT_PROVIDER || "groq"; // "groq" | "elevenlabs"
 
 async function handleWebhook(req: Request, res: Response) {
   res.sendStatus(200);
@@ -32,12 +34,16 @@ async function handleWebhook(req: Request, res: Response) {
     if (senderNumber !== config.agent.ownerNumber) return;
 
     let text = extractText(messageContent);
+    let isVoice = false;
 
     // Voice notes (pttMessage) and audio files (audioMessage)
     if (!text && (messageContent.pttMessage || messageContent.audioMessage)) {
       console.log("[Webhook] Voice/audio message detected, transcribing...");
       text = await transcribeAudio(key);
-      if (text) text = `[Voice message]: ${text}`;
+      if (text) {
+        isVoice = true;
+        text = `[Voice message]: ${text}`;
+      }
     }
 
     // Image messages
@@ -53,7 +59,7 @@ async function handleWebhook(req: Request, res: Response) {
 
     console.log(`[Webhook] ${senderNumber}: ${text.slice(0, 80)}`);
 
-    processIncomingMessage(senderNumber, text).catch((err) => {
+    processIncomingMessage(senderNumber, text, isVoice).catch((err) => {
       console.error("[Webhook] Error processing message:", err);
     });
   } catch (err) {
@@ -61,24 +67,29 @@ async function handleWebhook(req: Request, res: Response) {
   }
 }
 
-/**
- * Downloads audio from Evolution API and transcribes it.
- * Tries Groq Whisper first (fast, free, supports Arabic/Darija), falls back to Hack Club AI.
- */
+// ── STT: Speech-to-Text ──
+
 async function transcribeAudio(messageKey: any): Promise<string | null> {
   try {
     const base64 = await downloadMedia(messageKey);
     if (!base64) return null;
-
     const audioBuffer = Buffer.from(base64, "base64");
 
-    // Try Groq Whisper first (supports all languages including Arabic/Darija)
+    if (STT_PROVIDER === "elevenlabs" && ELEVENLABS_API_KEY) {
+      const result = await transcribeWithElevenLabs(audioBuffer);
+      if (result) return result;
+    }
+
     if (GROQ_API_KEY) {
       const result = await transcribeWithGroq(audioBuffer);
       if (result) return result;
     }
 
-    // Fallback to Hack Club AI Whisper endpoint
+    // Final fallback
+    if (ELEVENLABS_API_KEY && STT_PROVIDER !== "elevenlabs") {
+      return await transcribeWithElevenLabs(audioBuffer);
+    }
+
     return await transcribeWithHackClub(audioBuffer);
   } catch (err) {
     console.error("[Webhook] Audio transcription error:", err);
@@ -95,7 +106,7 @@ async function downloadMedia(messageKey: any): Promise<string | null> {
   });
 
   if (!mediaResp.ok) {
-    console.error(`[Webhook] Media download failed: ${mediaResp.status} ${await mediaResp.text()}`);
+    console.error(`[Webhook] Media download failed: ${mediaResp.status}`);
     return null;
   }
 
@@ -103,12 +114,38 @@ async function downloadMedia(messageKey: any): Promise<string | null> {
   return mediaData.base64 || null;
 }
 
+async function transcribeWithElevenLabs(audioBuffer: Buffer): Promise<string | null> {
+  try {
+    const formData = new FormData();
+    formData.append("file", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("model_id", "scribe_v2");
+
+    const resp = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+      method: "POST",
+      headers: { "xi-api-key": ELEVENLABS_API_KEY },
+      body: formData,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!resp.ok) {
+      console.error(`[Webhook] ElevenLabs STT failed: ${resp.status}`);
+      return null;
+    }
+
+    const result = (await resp.json()) as any;
+    console.log(`[Webhook] ElevenLabs STT: ${result.text?.slice(0, 80)}`);
+    return result.text || null;
+  } catch (err) {
+    console.error("[Webhook] ElevenLabs STT error:", err);
+    return null;
+  }
+}
+
 async function transcribeWithGroq(audioBuffer: Buffer): Promise<string | null> {
   try {
     const formData = new FormData();
     formData.append("file", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
     formData.append("model", "whisper-large-v3");
-    formData.append("language", "ar");
 
     const resp = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
@@ -118,15 +155,15 @@ async function transcribeWithGroq(audioBuffer: Buffer): Promise<string | null> {
     });
 
     if (!resp.ok) {
-      console.error(`[Webhook] Groq transcription failed: ${resp.status}`);
+      console.error(`[Webhook] Groq STT failed: ${resp.status}`);
       return null;
     }
 
     const result = (await resp.json()) as any;
-    console.log(`[Webhook] Groq transcription: ${result.text?.slice(0, 80)}`);
+    console.log(`[Webhook] Groq STT: ${result.text?.slice(0, 80)}`);
     return result.text || null;
   } catch (err) {
-    console.error("[Webhook] Groq error:", err);
+    console.error("[Webhook] Groq STT error:", err);
     return null;
   }
 }
@@ -144,18 +181,16 @@ async function transcribeWithHackClub(audioBuffer: Buffer): Promise<string | nul
       signal: AbortSignal.timeout(30_000),
     });
 
-    if (!resp.ok) {
-      console.error(`[Webhook] HackClub transcription failed: ${resp.status}`);
-      return null;
-    }
+    if (!resp.ok) return null;
 
     const result = (await resp.json()) as any;
     return result.text || null;
   } catch (err) {
-    console.error("[Webhook] HackClub Whisper error:", err);
     return null;
   }
 }
+
+// ── Image description ──
 
 async function describeImage(messageKey: any): Promise<string | null> {
   try {
@@ -193,6 +228,8 @@ async function describeImage(messageKey: any): Promise<string | null> {
     return null;
   }
 }
+
+// ── Routes ──
 
 webhookRouter.post("/webhook", handleWebhook);
 webhookRouter.post("/webhook/:event", handleWebhook);
