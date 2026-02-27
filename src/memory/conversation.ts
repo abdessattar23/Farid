@@ -5,7 +5,7 @@ export interface ChatMessage {
   content: string;
 }
 
-const MAX_HISTORY = 10;
+const MAX_HISTORY = 6;
 
 export function saveMessage(chatId: string, role: ChatMessage["role"], content: string): void {
   const db = getDb();

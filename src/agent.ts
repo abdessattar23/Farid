@@ -7,6 +7,7 @@ import { sendMessage, sendVoiceMessage, sendPresence } from "./whatsapp";
 import { getActiveFocusSession } from "./tools/productivity";
 
 const MAX_TOOL_ROUNDS = 10;
+const MAX_TOOL_RESULT_CHARS = 2500; // Prevent context overflow from huge tool outputs (screenshots, UI trees)
 
 // ── Types matching the OpenAI chat completions API ──
 
@@ -117,7 +118,8 @@ export async function processIncomingMessage(senderNumber: string, text: string,
 
     const summary = getLatestSummary(chatId);
     if (summary) {
-      ctxParts.push(`[CONVERSATION MEMORY — summary of past interactions:]\n${summary}`);
+      const capped = summary.length > 1200 ? summary.slice(0, 1200) + "\n[...]" : summary;
+      ctxParts.push(`[CONVERSATION MEMORY — summary of past interactions:]\n${capped}`);
     }
 
     const contextBlock = ctxParts.length > 0 ? "\n\n" + ctxParts.join("\n\n") : "";
@@ -173,7 +175,11 @@ export async function processIncomingMessage(senderNumber: string, text: string,
       );
 
       for (const { id, result } of results) {
-        messages.push({ role: "tool", tool_call_id: id, content: result });
+        const truncated =
+          result.length > MAX_TOOL_RESULT_CHARS
+            ? result.slice(0, MAX_TOOL_RESULT_CHARS) + "\n[... truncated to save context]"
+            : result;
+        messages.push({ role: "tool", tool_call_id: id, content: truncated });
       }
     }
 
@@ -250,7 +256,11 @@ export async function sendSmartProactiveMessage(chatId: string, context: string)
       );
 
       for (const { id, result } of results) {
-        messages.push({ role: "tool", tool_call_id: id, content: result });
+        const truncated =
+          result.length > MAX_TOOL_RESULT_CHARS
+            ? result.slice(0, MAX_TOOL_RESULT_CHARS) + "\n[... truncated to save context]"
+            : result;
+        messages.push({ role: "tool", tool_call_id: id, content: truncated });
       }
     }
 

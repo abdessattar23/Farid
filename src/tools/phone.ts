@@ -22,19 +22,37 @@ type ParamDef = Record<string, { type: string; description: string; required?: b
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 15_000;
 
+const FAST_POLL_INTERVAL_MS = 200;
+const FAST_POLL_TIMEOUT_MS = 10_000;
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function sendCommand(type: string, params?: Record<string, any>): Promise<string> {
+export interface CommandResponse {
+  status: "completed" | "failed" | "timeout";
+  response?: any;
+  error?: string;
+}
+
+export async function sendCommand(type: string, params?: Record<string, any>): Promise<string> {
   if (PHONE_TABLE === "commands") {
-    return sendCommandViaCommandsTable(type, params);
+    return sendCommandViaCommandsTable(type, params, POLL_INTERVAL_MS, POLL_TIMEOUT_MS);
   }
   return sendCommandViaNotifications(type, params);
 }
 
-/** Uses commands table: insert { type, params }, poll by id until completed/failed */
-async function sendCommandViaCommandsTable(type: string, params?: Record<string, any>): Promise<string> {
+/**
+ * Faster variant for the automation loop — 200ms poll, 10s timeout.
+ * Returns structured data instead of a formatted string.
+ */
+export async function sendCommandFast(type: string, params?: Record<string, any>): Promise<CommandResponse> {
+  if (PHONE_TABLE !== "commands") {
+    const text = await sendCommandViaNotifications(type, params);
+    const failed = text.startsWith("[failed]") || text.startsWith("[timeout]");
+    return { status: failed ? "failed" : "completed", response: text };
+  }
+
   const { data: inserted, error: insertErr } = await supabase
     .from("commands")
     .insert({ type, params: params || {} })
@@ -45,7 +63,46 @@ async function sendCommandViaCommandsTable(type: string, params?: Record<string,
     throw new Error(`Supabase insert failed: ${insertErr?.message || "no id returned"}`);
   }
 
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  const deadline = Date.now() + FAST_POLL_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const { data, error } = await supabase
+      .from("commands")
+      .select("status, response, error")
+      .eq("id", inserted.id)
+      .single();
+
+    if (error) throw new Error(`Poll failed: ${error.message}`);
+
+    if (data?.status === "completed") {
+      return { status: "completed", response: data.response };
+    }
+    if (data?.status === "failed") {
+      return { status: "failed", error: data.error || "Unknown error" };
+    }
+
+    await sleep(FAST_POLL_INTERVAL_MS);
+  }
+
+  return { status: "timeout", error: "Device did not respond within 10 seconds" };
+}
+
+/** Uses commands table: insert { type, params }, poll by id until completed/failed */
+async function sendCommandViaCommandsTable(
+  type: string, params: Record<string, any> | undefined,
+  pollInterval: number, pollTimeout: number,
+): Promise<string> {
+  const { data: inserted, error: insertErr } = await supabase
+    .from("commands")
+    .insert({ type, params: params || {} })
+    .select("id")
+    .single();
+
+  if (insertErr || !inserted?.id) {
+    throw new Error(`Supabase insert failed: ${insertErr?.message || "no id returned"}`);
+  }
+
+  const deadline = Date.now() + pollTimeout;
 
   while (Date.now() < deadline) {
     const { data, error } = await supabase
@@ -67,7 +124,7 @@ async function sendCommandViaCommandsTable(type: string, params?: Record<string,
       return `[failed] ${data.error || "Unknown error"}`;
     }
 
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(pollInterval);
   }
 
   return "[timeout] Device did not respond within 15 seconds";
