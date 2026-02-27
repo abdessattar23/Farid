@@ -5,6 +5,7 @@ import { processIncomingMessage } from "./agent";
 export const webhookRouter = Router();
 
 const { apiUrl, instance, apiKey } = config.evolution;
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 
 async function handleWebhook(req: Request, res: Response) {
   res.sendStatus(200);
@@ -30,21 +31,19 @@ async function handleWebhook(req: Request, res: Response) {
 
     if (senderNumber !== config.agent.ownerNumber) return;
 
-    // Try to extract text from various message types
     let text = extractText(messageContent);
 
-    // Handle voice messages — download and transcribe
-    if (!text && messageContent.audioMessage) {
-      const messageId = key.id;
-      text = await transcribeAudio(messageId);
-      if (text) text = `[Voice message transcription]: ${text}`;
+    // Voice notes (pttMessage) and audio files (audioMessage)
+    if (!text && (messageContent.pttMessage || messageContent.audioMessage)) {
+      console.log("[Webhook] Voice/audio message detected, transcribing...");
+      text = await transcribeAudio(key);
+      if (text) text = `[Voice message]: ${text}`;
     }
 
-    // Handle image messages — describe the image
+    // Image messages
     if (!text && messageContent.imageMessage) {
-      const messageId = key.id;
       const caption = messageContent.imageMessage.caption || "";
-      const description = await describeImage(messageId);
+      const description = await describeImage(key);
       text = description
         ? `[Image: ${description}]${caption ? ` Caption: ${caption}` : ""}`
         : caption || null;
@@ -63,70 +62,104 @@ async function handleWebhook(req: Request, res: Response) {
 }
 
 /**
- * Downloads media from Evolution API and transcribes audio using Hack Club AI.
+ * Downloads audio from Evolution API and transcribes it.
+ * Tries Groq Whisper first (fast, free, supports Arabic/Darija), falls back to Hack Club AI.
  */
-async function transcribeAudio(messageId: string): Promise<string | null> {
+async function transcribeAudio(messageKey: any): Promise<string | null> {
   try {
-    // Get base64 media from Evolution API
-    const mediaResp = await fetch(`${apiUrl}/chat/getBase64FromMediaMessage/${instance}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", apikey: apiKey },
-      body: JSON.stringify({ message: { key: { id: messageId } } }),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!mediaResp.ok) {
-      console.error(`[Webhook] Media download failed: ${mediaResp.status}`);
-      return null;
-    }
-
-    const mediaData = (await mediaResp.json()) as any;
-    const base64 = mediaData.base64;
+    const base64 = await downloadMedia(messageKey);
     if (!base64) return null;
 
-    // Use Hack Club AI to transcribe (Whisper via OpenAI-compatible endpoint)
     const audioBuffer = Buffer.from(base64, "base64");
-    const formData = new FormData();
-    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "audio.ogg");
-    formData.append("model", "whisper-1");
 
-    const transcribeResp = await fetch(`${config.hackclub.baseUrl}/audio/transcriptions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.hackclub.apiKey}` },
-      body: formData,
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!transcribeResp.ok) {
-      console.error(`[Webhook] Transcription failed: ${transcribeResp.status}`);
-      return null;
+    // Try Groq Whisper first (supports all languages including Arabic/Darija)
+    if (GROQ_API_KEY) {
+      const result = await transcribeWithGroq(audioBuffer);
+      if (result) return result;
     }
 
-    const result = (await transcribeResp.json()) as any;
-    return result.text || null;
+    // Fallback to Hack Club AI Whisper endpoint
+    return await transcribeWithHackClub(audioBuffer);
   } catch (err) {
     console.error("[Webhook] Audio transcription error:", err);
     return null;
   }
 }
 
-/**
- * Downloads an image from Evolution API and describes it using the LLM.
- */
-async function describeImage(messageId: string): Promise<string | null> {
+async function downloadMedia(messageKey: any): Promise<string | null> {
+  const mediaResp = await fetch(`${apiUrl}/chat/getBase64FromMediaMessage/${instance}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: apiKey },
+    body: JSON.stringify({ message: { key: messageKey } }),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!mediaResp.ok) {
+    console.error(`[Webhook] Media download failed: ${mediaResp.status} ${await mediaResp.text()}`);
+    return null;
+  }
+
+  const mediaData = (await mediaResp.json()) as any;
+  return mediaData.base64 || null;
+}
+
+async function transcribeWithGroq(audioBuffer: Buffer): Promise<string | null> {
   try {
-    const mediaResp = await fetch(`${apiUrl}/chat/getBase64FromMediaMessage/${instance}`, {
+    const formData = new FormData();
+    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("model", "whisper-large-v3");
+    formData.append("language", "ar");
+
+    const resp = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", apikey: apiKey },
-      body: JSON.stringify({ message: { key: { id: messageId } } }),
+      headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
+      body: formData,
       signal: AbortSignal.timeout(30_000),
     });
 
-    if (!mediaResp.ok) return null;
+    if (!resp.ok) {
+      console.error(`[Webhook] Groq transcription failed: ${resp.status}`);
+      return null;
+    }
 
-    const mediaData = (await mediaResp.json()) as any;
-    const base64 = mediaData.base64;
-    const mimetype = mediaData.mimetype || "image/jpeg";
+    const result = (await resp.json()) as any;
+    console.log(`[Webhook] Groq transcription: ${result.text?.slice(0, 80)}`);
+    return result.text || null;
+  } catch (err) {
+    console.error("[Webhook] Groq error:", err);
+    return null;
+  }
+}
+
+async function transcribeWithHackClub(audioBuffer: Buffer): Promise<string | null> {
+  try {
+    const formData = new FormData();
+    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("model", "whisper-1");
+
+    const resp = await fetch(`${config.hackclub.baseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.hackclub.apiKey}` },
+      body: formData,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!resp.ok) {
+      console.error(`[Webhook] HackClub transcription failed: ${resp.status}`);
+      return null;
+    }
+
+    const result = (await resp.json()) as any;
+    return result.text || null;
+  } catch (err) {
+    console.error("[Webhook] HackClub Whisper error:", err);
+    return null;
+  }
+}
+
+async function describeImage(messageKey: any): Promise<string | null> {
+  try {
+    const base64 = await downloadMedia(messageKey);
     if (!base64) return null;
 
     const resp = await fetch(`${config.hackclub.baseUrl}/chat/completions`, {
@@ -142,7 +175,7 @@ async function describeImage(messageId: string): Promise<string | null> {
             role: "user",
             content: [
               { type: "text", text: "Describe this image concisely in one sentence. If it's a screenshot of code or an error, extract the key information." },
-              { type: "image_url", image_url: { url: `data:${mimetype};base64,${base64}` } },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
             ],
           },
         ],
