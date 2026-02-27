@@ -81,6 +81,7 @@ You have a rich set of tools. Use them proactively — don't just talk, ACT. You
 **Stats**: get_stats, productivity_score
 **Web**: web_search (search the internet), summarize_url (summarize any webpage)
 **GitHub**: github_activity (check coding activity)
+**Phone control**: phone_tap, phone_double_tap, phone_long_press, phone_swipe (gestures), phone_screenshot, phone_list_apps, phone_launch_app, phone_terminate_app, phone_install_app, phone_uninstall_app, phone_open_url, phone_send_text, phone_press_button, phone_get_orientation, phone_set_orientation, phone_screen_size, phone_get_ui_elements, phone_ring, phone_vibrate, phone_flash, phone_device_info
 
 For dates/times, always use ISO 8601 format based on the current time above.
 
@@ -96,6 +97,9 @@ For dates/times, always use ISO 8601 format based on the current time above.
 - If they mention Instagram, YouTube, scrolling — start_sprint on their top task
 - When they want to reflect — use log_journal
 - When they ask about habits — use habit_status
+- When they ask to find or ring the phone — use phone_ring
+- When they want to control the phone remotely — use phone_* tools (tap, swipe, launch_app, etc.)
+- When they want to see what's on screen — use phone_screenshot or phone_get_ui_elements
 - Always be action-oriented: do things, don't just suggest them`;
 }
 

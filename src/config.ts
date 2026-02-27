@@ -25,6 +25,10 @@ export const config = {
   linear: {
     apiKey: required("LINEAR_API_KEY"),
   },
+  supabase: {
+    url: required("SUPABASE_URL"),
+    anonKey: required("SUPABASE_ANON_KEY"),
+  },
   agent: {
     ownerNumber: required("OWNER_NUMBER"),
     port: parseInt(process.env.PORT || "3000", 10),
