@@ -127,10 +127,11 @@ function initTables(db: Database.Database): void {
       UNIQUE(habit_id, completed_date)
     );
 
-    -- Last message timestamp for silence detection
+    -- Chat metadata for silence detection and autonomous cooldown
     CREATE TABLE IF NOT EXISTS chat_meta (
       chat_id TEXT PRIMARY KEY,
-      last_message_at TEXT NOT NULL DEFAULT (datetime('now'))
+      last_message_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_autonomous_at TEXT
     );
   `);
 }

@@ -7,5 +7,6 @@ import "./journal";
 import "./habits";
 import "./web";
 import "./github";
+import "./planner";
 
 export { executeTool, generateToolsParam, getAllTools } from "./registry";

@@ -76,6 +76,7 @@ You have a rich set of tools. Use them proactively — don't just talk, ACT. You
 **Journal**: log_journal (daily reflection), get_journal (review past entries)
 **Habits**: create_habit, check_habit (mark done), habit_status (show streaks), delete_habit
 **Focus**: start_focus, end_focus, start_sprint (5-min anti-procrastination burst)
+**Planning**: plan_my_day (create time-blocked schedule with auto-reminders)
 **Reminders**: set_reminder, set_recurring_reminder, list_reminders, cancel_reminder
 **Stats**: get_stats, productivity_score
 **Web**: web_search (search the internet), summarize_url (summarize any webpage)
@@ -106,4 +107,73 @@ Current time: ${new Date().toLocaleString("en-US")}
 Context: ${context}
 
 Keep it short, punchy, and motivating. Format for WhatsApp (*bold*, _italic_). Include specific tasks when available.`;
+}
+
+/**
+ * Prompt for the autonomous thinking loop.
+ * The LLM decides whether to act or stay silent.
+ */
+export function buildAutonomousPrompt(contextSnapshot: string): string {
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const ctx = getActiveContext(now);
+
+  return `You are Farid's autonomous brain. You are NOT responding to a user message — you are thinking independently.
+
+Current time: ${dateStr}, ${timeStr}
+Active context: ${ctx.mode}
+
+## Situation
+${contextSnapshot}
+
+## Your job
+
+Decide whether Mohammed needs a message from you RIGHT NOW. You can also take silent actions (set reminders, check tasks) without messaging him.
+
+## Rules
+
+- Only message if you have something *genuinely useful* — a specific suggestion, reminder, or question
+- You can call tools silently (set_reminder, list_my_tasks, habit_status, etc.) to gather info or take action
+- If you set reminders or take actions, tell Mohammed what you did briefly
+- DON'T be annoying. One focused message is better than three vague ones
+- DON'T repeat what you've already said recently
+- If the user is in a focus session, do NOT disturb unless urgent
+- Format for WhatsApp (*bold*, _italic_)
+- Keep it under 300 characters unless sharing a plan
+
+## Output
+
+If nothing needs attention, respond with exactly: [NO_ACTION]
+Otherwise, write the message to send to Mohammed.`;
+}
+
+/**
+ * Prompt for the morning auto-planner.
+ */
+export function buildMorningPlannerPrompt(): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+
+  return `[SYSTEM] It's ${dateStr} morning. Create Mohammed's daily plan.
+
+Steps:
+1. Call get_task_summary to see all tasks
+2. Call habit_status to check habit streaks
+3. Based on priorities and the day (${isWeekend ? "weekend — focus on personal projects, YouCode, learning" : "weekday — Sofrecom is top priority during work hours"}), create a time-blocked plan
+4. For each time block, call set_reminder with the block's start time and a short message about what to work on
+5. Send the complete plan as one message
+
+Example format:
+*Your plan for today:*
+⏰ 9:00 — Sofrecom: API migration
+⏰ 11:00 — Code review
+⏰ 14:00 — YouCode project
+⏰ 17:00 — Hack-Nation tasks
+⏰ 19:00 — Learning: MCP chapter 3
+
+Habits: 🔥 Day X of [streak]. Don't break it!
+
+I've set reminders for each block. Let's go!`;
 }

@@ -27,6 +27,19 @@ export function getLastMessageTime(chatId: string): Date | null {
   return row ? new Date(row.last_message_at) : null;
 }
 
+export function getLastAutonomousAction(chatId: string): Date | null {
+  const db = getDb();
+  const row = db.prepare("SELECT last_autonomous_at FROM chat_meta WHERE chat_id = ?").get(chatId) as any;
+  return row?.last_autonomous_at ? new Date(row.last_autonomous_at) : null;
+}
+
+export function recordAutonomousAction(chatId: string): void {
+  const db = getDb();
+  db.prepare(
+    "INSERT INTO chat_meta (chat_id, last_message_at, last_autonomous_at) VALUES (?, datetime('now'), datetime('now')) ON CONFLICT(chat_id) DO UPDATE SET last_autonomous_at = datetime('now')"
+  ).run(chatId);
+}
+
 /**
  * Retrieves the last N messages for a chat, ordered chronologically.
  */
