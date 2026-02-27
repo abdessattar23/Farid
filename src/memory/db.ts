@@ -134,6 +134,17 @@ function initTables(db: Database.Database): void {
       last_autonomous_at TEXT
     );
   `);
+
+  // Migration: add last_autonomous_at if table existed without it (e.g. from older schema)
+  try {
+    const cols = db.prepare("PRAGMA table_info(chat_meta)").all() as { name: string }[];
+    const hasCol = cols.some((c) => c.name === "last_autonomous_at");
+    if (!hasCol) {
+      db.exec("ALTER TABLE chat_meta ADD COLUMN last_autonomous_at TEXT");
+    }
+  } catch {
+    // Non-fatal
+  }
 }
 
 export function closeDb(): void {

@@ -1,12 +1,13 @@
 /**
  * Android phone remote control via Supabase.
  *
- * Response flow:
- * 1. Insert command into `notifications` table (title, body JSON with type, command_id, params)
- * 2. Android app receives via Realtime or polling, executes command
- * 3. App writes result to `command_acks` table (command_id, status, message, device_info)
- * 4. We poll command_acks for matching command_id until response or 15s timeout
- * 5. Return status + message (+ device_info if present) to the LLM
+ * Supports two table layouts (set SUPABASE_PHONE_TABLE env):
+ *
+ * 1. "commands" (default, per Android docs): Insert { type, params }, poll same row by id
+ *    until status = completed|failed. Response in response/error columns.
+ *
+ * 2. "notifications" + "command_acks": Insert { title, body } with command_id in body,
+ *    poll command_acks by command_id. Response in status, message, device_info.
  */
 import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
@@ -14,6 +15,7 @@ import { config } from "../config";
 import { registerTool } from "./registry";
 
 const supabase = createClient(config.supabase.url, config.supabase.anonKey);
+const PHONE_TABLE = process.env.SUPABASE_PHONE_TABLE || "commands";
 
 type ParamDef = Record<string, { type: string; description: string; required?: boolean; enum?: string[] }>;
 
@@ -24,27 +26,55 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForAck(commandId: string): Promise<{ status: string; message: string; device_info?: any }> {
+async function sendCommand(type: string, params?: Record<string, any>): Promise<string> {
+  if (PHONE_TABLE === "commands") {
+    return sendCommandViaCommandsTable(type, params);
+  }
+  return sendCommandViaNotifications(type, params);
+}
+
+/** Uses commands table: insert { type, params }, poll by id until completed/failed */
+async function sendCommandViaCommandsTable(type: string, params?: Record<string, any>): Promise<string> {
+  const { data: inserted, error: insertErr } = await supabase
+    .from("commands")
+    .insert({ type, params: params || {} })
+    .select("id")
+    .single();
+
+  if (insertErr || !inserted?.id) {
+    throw new Error(`Supabase insert failed: ${insertErr?.message || "no id returned"}`);
+  }
+
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     const { data, error } = await supabase
-      .from("command_acks")
-      .select("status, message, device_info")
-      .eq("command_id", commandId)
-      .limit(1)
-      .maybeSingle();
+      .from("commands")
+      .select("status, response, error")
+      .eq("id", inserted.id)
+      .single();
 
-    if (error) throw new Error(`Ack poll failed: ${error.message}`);
-    if (data) return data;
+    if (error) throw new Error(`Poll failed: ${error.message}`);
+
+    if (data?.status === "completed") {
+      const resp = data.response;
+      if (resp && typeof resp === "object") {
+        return `[completed] ${JSON.stringify(resp)}`;
+      }
+      return `[completed] ${String(resp ?? "")}`;
+    }
+    if (data?.status === "failed") {
+      return `[failed] ${data.error || "Unknown error"}`;
+    }
 
     await sleep(POLL_INTERVAL_MS);
   }
 
-  return { status: "timeout", message: "Device did not respond within 15 seconds" };
+  return "[timeout] Device did not respond within 15 seconds";
 }
 
-async function sendCommand(type: string, params?: Record<string, any>): Promise<string> {
+/** Uses notifications + command_acks (legacy) */
+async function sendCommandViaNotifications(type: string, params?: Record<string, any>): Promise<string> {
   const commandId = uuidv4();
   const body: Record<string, any> = { type, command_id: commandId };
   if (params && Object.keys(params).length > 0) body.params = params;
@@ -56,12 +86,27 @@ async function sendCommand(type: string, params?: Record<string, any>): Promise<
 
   if (error) throw new Error(`Supabase insert failed: ${error.message}`);
 
-  const ack = await waitForAck(commandId);
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
 
-  if (ack.device_info) {
-    return `[${ack.status}] ${ack.message}\nDevice info: ${JSON.stringify(ack.device_info)}`;
+  while (Date.now() < deadline) {
+    const { data, error: pollErr } = await supabase
+      .from("command_acks")
+      .select("status, message, device_info")
+      .eq("command_id", commandId)
+      .limit(1)
+      .maybeSingle();
+
+    if (pollErr) throw new Error(`Ack poll failed: ${pollErr.message}`);
+    if (data) {
+      let out = `[${data.status}] ${data.message}`;
+      if (data.device_info) out += `\nDevice info: ${JSON.stringify(data.device_info)}`;
+      return out;
+    }
+
+    await sleep(POLL_INTERVAL_MS);
   }
-  return `[${ack.status}] ${ack.message}`;
+
+  return "[timeout] Device did not respond within 15 seconds";
 }
 
 interface CommandDef {
