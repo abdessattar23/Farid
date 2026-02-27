@@ -49,7 +49,7 @@ export async function sendVoiceMessage(number: string, text: string): Promise<vo
       body: JSON.stringify({
         number,
         audioMessage: {
-          audio: audioBase64,
+          audio: `data:audio/mp3;base64,${audioBase64}`,
         },
         options: {
           presence: "recording",
