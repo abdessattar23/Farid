@@ -89,6 +89,9 @@ LINEAR_API_KEY=lin_api_xxxxx
 OWNER_NUMBER=212xxxxxxxxx
 PORT=3000
 TIMEZONE=Africa/Casablanca
+
+# Optional: protect Resend inbound webhook endpoint (/webhook/resend)
+# RESEND_WEBHOOK_SECRET=your_resend_webhook_secret
 ```
 
 **OWNER_NUMBER**: Your WhatsApp number with country code, no `+` or spaces (e.g., `212612345678`).
@@ -288,6 +291,21 @@ curl -X POST https://your-evolution-api.com/webhook/set/farid \
 ```
 
 Verify at `https://farid.yourdomain.com/health`, then send a WhatsApp message.
+
+### Configure Resend Inbound Webhook (Optional)
+
+To forward inbound Resend emails to your WhatsApp (`OWNER_NUMBER`) as a short summary:
+
+1. (Recommended) Set `RESEND_WEBHOOK_SECRET` in your environment.
+2. In Resend, configure your inbound webhook URL as:
+   `https://farid.yourdomain.com/webhook/resend`
+3. Configure Resend to send the same secret in:
+   `Authorization: Bearer <RESEND_WEBHOOK_SECRET>`
+
+Farid will forward:
+- Sender (`from`)
+- Email subject
+- A short body preview
 
 ### Local Development
 
