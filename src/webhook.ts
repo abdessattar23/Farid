@@ -81,8 +81,8 @@ async function handleWebhook(req: Request, res: Response) {
 async function handleResendWebhook(req: Request, res: Response) {
   const expectedSecret = config.resend.webhookSecret;
   if (expectedSecret) {
-    const bearer = req.get("authorization");
-    const authSecret = bearer?.replace(/^Bearer\s+/i, "") || req.get("x-resend-webhook-secret");
+    const bearer = req.get("Authorization");
+    const authSecret = bearer?.replace(/^Bearer\s+/i, "");
     if (authSecret !== expectedSecret) {
       console.warn("[Resend Webhook] Unauthorized request");
       return res.sendStatus(401);
@@ -93,7 +93,10 @@ async function handleResendWebhook(req: Request, res: Response) {
 
   try {
     const payload = req.body as Record<string, any> | undefined;
-    if (!payload) return;
+    if (!payload) {
+      console.warn("[Resend Webhook] Missing payload");
+      return;
+    }
 
     const eventType = asString(payload.type || payload.event);
     if (eventType && eventType !== "email.received") return;
@@ -313,8 +316,6 @@ function buildBodyPreview(data: Record<string, any>): string | null {
   if (!html) return null;
 
   const stripped = html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
