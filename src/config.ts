@@ -34,4 +34,7 @@ export const config = {
     port: parseInt(process.env.PORT || "3000", 10),
     timezone: process.env.TIMEZONE || "Africa/Casablanca",
   },
+  resend: {
+    webhookSecret: process.env.RESEND_WEBHOOK_SECRET || "",
+  },
 } as const;

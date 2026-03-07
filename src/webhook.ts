@@ -1,6 +1,7 @@
 import { Request, Response, Router } from "express";
 import { config } from "./config";
 import { processIncomingMessage } from "./agent";
+import { sendMessage } from "./whatsapp";
 
 export const webhookRouter = Router();
 
@@ -74,6 +75,46 @@ async function handleWebhook(req: Request, res: Response) {
     });
   } catch (err) {
     console.error("[Webhook] Error:", err);
+  }
+}
+
+async function handleResendWebhook(req: Request, res: Response) {
+  const expectedSecret = config.resend.webhookSecret;
+  if (expectedSecret) {
+    const bearer = req.get("authorization");
+    const authSecret = bearer?.replace(/^Bearer\s+/i, "") || req.get("x-resend-webhook-secret");
+    if (authSecret !== expectedSecret) {
+      console.warn("[Resend Webhook] Unauthorized request");
+      return res.sendStatus(401);
+    }
+  }
+
+  res.sendStatus(200);
+
+  try {
+    const payload = req.body as Record<string, any> | undefined;
+    if (!payload) return;
+
+    const eventType = asString(payload.type || payload.event);
+    if (eventType && eventType !== "email.received") return;
+
+    const data = (payload.data && typeof payload.data === "object") ? payload.data : payload;
+    const from = asString(data.from) || asString(data.sender) || "Unknown sender";
+    const subject = asString(data.subject) || "(No subject)";
+    const bodyPreview = buildBodyPreview(data);
+    const receivedAt = asString(data.created_at) || asString(payload.created_at);
+
+    const summaryParts = [
+      "📩 New incoming email",
+      `From: ${from}`,
+      `Subject: ${subject}`,
+      bodyPreview ? `Preview: ${bodyPreview}` : "Preview: (No text body)",
+      receivedAt ? `Received: ${receivedAt}` : null,
+    ].filter(Boolean);
+
+    await sendMessage(config.agent.ownerNumber, summaryParts.join("\n"));
+  } catch (err) {
+    console.error("[Resend Webhook] Error forwarding inbound email:", err);
   }
 }
 
@@ -242,6 +283,7 @@ async function describeImage(messageKey: any): Promise<string | null> {
 // ── Routes ──
 
 webhookRouter.post("/webhook", handleWebhook);
+webhookRouter.post("/webhook/resend", handleResendWebhook);
 webhookRouter.post("/webhook/:event", handleWebhook);
 
 webhookRouter.get("/health", (_req: Request, res: Response) => {
@@ -255,4 +297,33 @@ function extractText(message: Record<string, any>): string | null {
   if (message.videoMessage?.caption) return message.videoMessage.caption;
   if (message.documentMessage?.caption) return message.documentMessage.caption;
   return null;
+}
+
+function asString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function buildBodyPreview(data: Record<string, any>): string | null {
+  const text = asString(data.text) || asString(data.plainText) || asString(data.body);
+  if (text) return truncateSingleLine(text, 280);
+
+  const html = asString(data.html);
+  if (!html) return null;
+
+  const stripped = html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return stripped ? truncateSingleLine(stripped, 280) : null;
+}
+
+function truncateSingleLine(text: string, limit: number): string {
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= limit) return singleLine;
+  return `${singleLine.slice(0, limit - 1)}…`;
 }
