@@ -81,12 +81,20 @@ async function handleWebhook(req: Request, res: Response) {
 async function handleResendWebhook(req: Request, res: Response) {
   const expectedSecret = config.resend.webhookSecret;
   if (expectedSecret) {
-    const authorized = req.get("svix-id").startsWith("msg_") && req.get('svix-timestamp').startsWith('17');
-    if (!authorized) {
-      console.warn("[Resend Webhook] Unauthorized request");
-      return res.sendStatus(401);
-    }
+  const svixId = req.get("svix-id");
+  const svixTimestamp = req.get("svix-timestamp");
+
+  const authorized =
+    typeof svixId === "string" &&
+    typeof svixTimestamp === "string" &&
+    svixId.startsWith("msg_") &&
+    svixTimestamp.startsWith("17");
+
+  if (!authorized) {
+    console.warn("[Resend Webhook] Unauthorized request");
+    return res.sendStatus(401);
   }
+}
 
   res.sendStatus(200);
 
