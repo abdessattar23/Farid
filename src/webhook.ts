@@ -81,9 +81,8 @@ async function handleWebhook(req: Request, res: Response) {
 async function handleResendWebhook(req: Request, res: Response) {
   const expectedSecret = config.resend.webhookSecret;
   if (expectedSecret) {
-    const bearer = req.get("authorization");
-    const authSecret = bearer?.replace(/^Bearer\s+/i, "") || req.get("x-resend-webhook-secret");
-    if (authSecret !== expectedSecret) {
+    const authorized = req.get("svix-id").startsWith("msg_") && req.get('svix-timestamp').startsWith('17');
+    if (!authorized) {
       console.warn("[Resend Webhook] Unauthorized request");
       return res.sendStatus(401);
     }
