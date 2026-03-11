@@ -106,22 +106,134 @@ async function handleResendWebhook(req: Request, res: Response) {
     if (eventType && eventType !== "email.received") return;
 
     const data = (payload.data && typeof payload.data === "object") ? payload.data : payload;
+    const emailId = asString(data.email_id) || asString(data.id);
     const from = asString(data.from) || asString(data.sender) || "Unknown sender";
     const subject = asString(data.subject) || "(No subject)";
-    const bodyPreview = buildBodyPreview(data);
     const receivedAt = asString(data.created_at) || asString(payload.created_at);
 
-    const summaryParts = [
-      "📩 New incoming email",
-      `From: ${from}`,
-      `Subject: ${subject}`,
-      bodyPreview ? `Preview: ${bodyPreview}` : "Preview: (No text body)",
-      receivedAt ? `Received: ${receivedAt}` : null,
-    ].filter(Boolean);
+    // Fetch full email content via Resend API if we have an email ID and API key
+    let emailText: string | null = null;
+    if (emailId && config.resend.apiKey) {
+      emailText = await fetchResendEmailText(emailId);
+    }
 
-    await sendMessage(config.agent.ownerNumber, summaryParts.join("\n"));
+    // Fall back to body preview from the webhook payload if full fetch isn't available
+    if (!emailText) {
+      emailText = buildBodyPreview(data);
+    }
+
+    // Summarize email for WhatsApp using AI
+    const aiSummary = emailText
+      ? await summarizeEmailForWhatsApp({ from, subject, receivedAt, emailText })
+      : null;
+
+    if (aiSummary) {
+      await sendMessage(config.agent.ownerNumber, aiSummary);
+    } else {
+      // Minimal fallback when there is no text body and AI is unavailable
+      const summaryParts = [
+        "📩 New incoming email",
+        `From: ${from}`,
+        `Subject: ${subject}`,
+        emailText ? `Preview: ${emailText}` : "Preview: (No text body)",
+        receivedAt ? `Received: ${receivedAt}` : null,
+      ].filter(Boolean);
+      await sendMessage(config.agent.ownerNumber, summaryParts.join("\n"));
+    }
   } catch (err) {
     console.error("[Resend Webhook] Error forwarding inbound email:", err);
+  }
+}
+
+async function fetchResendEmailText(emailId: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`https://api.resend.com/emails/${emailId}`, {
+      headers: {
+        Authorization: `Bearer ${config.resend.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!resp.ok) {
+      console.error(`[Resend Webhook] Failed to fetch email ${emailId}: ${resp.status}`);
+      return null;
+    }
+
+    const email = (await resp.json()) as any;
+
+    // Prefer plain text; fall back to HTML stripped of tags
+    const plain = asString(email.text);
+    if (plain) return plain;
+
+    const html = asString(email.html);
+    if (!html) return null;
+
+    return html
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || null;
+  } catch (err) {
+    console.error("[Resend Webhook] Error fetching email from Resend API:", err);
+    return null;
+  }
+}
+
+async function summarizeEmailForWhatsApp(params: {
+  from: string;
+  subject: string;
+  receivedAt: string | null;
+  emailText: string;
+}): Promise<string | null> {
+  try {
+    const { from, subject, receivedAt, emailText } = params;
+
+    const prompt =
+      `You received an email. Summarize it concisely and format it as a WhatsApp notification message.\n` +
+      `Rules:\n` +
+      `- Include ALL sensitive details verbatim: OTPs, login codes, passwords, verification codes, links, account names, amounts, dates, deadlines — never redact or hide them.\n` +
+      `- Use simple WhatsApp-friendly formatting (no markdown headers, short paragraphs or bullets).\n` +
+      `- Keep the tone informational, not conversational.\n` +
+      `- Start with a relevant emoji that fits the email topic.\n\n` +
+      `From: ${from}\n` +
+      `Subject: ${subject}\n` +
+      (receivedAt ? `Received: ${receivedAt}\n` : "") +
+      `\nEmail body:\n${emailText}`;
+
+    const resp = await fetch(`${config.hackclub.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.hackclub.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.hackclub.model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 1024,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!resp.ok) {
+      console.error(`[Resend Webhook] AI summarization failed: ${resp.status}`);
+      return null;
+    }
+
+    const result = (await resp.json()) as any;
+    const content = result.choices?.[0]?.message?.content?.trim();
+
+    if (!content) return null;
+
+    // Strip <think>…</think> blocks that Qwen3 may emit
+    return content
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .trim() || null;
+  } catch (err) {
+    console.error("[Resend Webhook] Error calling AI for email summary:", err);
+    return null;
   }
 }
 
@@ -321,7 +433,7 @@ function buildBodyPreview(data: Record<string, any>): string | null {
 
   const stripped = html
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
