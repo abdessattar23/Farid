@@ -169,7 +169,7 @@ async function handleResendWebhook(req: Request, res: Response) {
 
 async function fetchResendEmailText(emailId: string): Promise<string | null> {
   try {
-    const resp = await fetch(`https://api.resend.com/emails/receiving${emailId}`, {
+    const resp = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
       headers: {
         Authorization: `Bearer ${config.resend.apiKey}`,
         "Content-Type": "application/json",
