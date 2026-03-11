@@ -100,32 +100,53 @@ async function handleResendWebhook(req: Request, res: Response) {
 
   try {
     const payload = req.body as Record<string, any> | undefined;
-    if (!payload) return;
+    if (!payload) {
+      console.warn("[Resend Webhook] Empty payload received");
+      return;
+    }
+
+    const payloadKeys = Object.keys(payload);
+    console.log(`[Resend Webhook] Payload keys: ${payloadKeys.join(", ")}`);
 
     const eventType = asString(payload.type || payload.event);
+    console.log(`[Resend Webhook] Event type: ${eventType ?? "(none)"}`);
     if (eventType && eventType !== "email.received") return;
 
     const data = (payload.data && typeof payload.data === "object") ? payload.data : payload;
+    const dataKeys = Object.keys(data);
+    console.log(`[Resend Webhook] Data keys: ${dataKeys.join(", ")}`);
+
     const emailId = asString(data.email_id) || asString(data.id);
     const from = asString(data.from) || asString(data.sender) || "Unknown sender";
     const subject = asString(data.subject) || "(No subject)";
     const receivedAt = asString(data.created_at) || asString(payload.created_at);
 
+    console.log(`[Resend Webhook] emailId=${emailId ?? "null"}, from=${from}, subject=${subject}`);
+    console.log(`[Resend Webhook] API key configured: ${config.resend.apiKey ? "yes" : "no"}`);
+
     // Fetch full email content via Resend API if we have an email ID and API key
     let emailText: string | null = null;
     if (emailId && config.resend.apiKey) {
+      console.log(`[Resend Webhook] Fetching full email via API for id=${emailId}`);
       emailText = await fetchResendEmailText(emailId);
+      console.log(`[Resend Webhook] API fetch result: ${emailText ? `${emailText.length} chars` : "null"}`);
+    } else {
+      console.warn(`[Resend Webhook] Skipping API fetch (emailId=${emailId ?? "null"}, apiKey=${config.resend.apiKey ? "set" : "missing"})`);
     }
 
     // Fall back to body preview from the webhook payload if full fetch isn't available
     if (!emailText) {
+      console.log("[Resend Webhook] Falling back to webhook payload body preview");
       emailText = buildBodyPreview(data);
+      console.log(`[Resend Webhook] Body preview result: ${emailText ? `${emailText.length} chars` : "null"}`);
     }
 
     // Summarize email for WhatsApp using AI
     const aiSummary = emailText
       ? await summarizeEmailForWhatsApp({ from, subject, receivedAt, emailText })
       : null;
+
+    console.log(`[Resend Webhook] Final: emailText=${emailText ? `${emailText.length} chars` : "null"}, aiSummary=${aiSummary ? `${aiSummary.length} chars` : "null"}`);
 
     if (aiSummary) {
       await sendMessage(config.agent.ownerNumber, aiSummary);
@@ -138,6 +159,7 @@ async function handleResendWebhook(req: Request, res: Response) {
         emailText ? `Preview: ${emailText}` : "Preview: (No text body)",
         receivedAt ? `Received: ${receivedAt}` : null,
       ].filter(Boolean);
+      console.log(`[Resend Webhook] Sending fallback summary to ${config.agent.ownerNumber}`);
       await sendMessage(config.agent.ownerNumber, summaryParts.join("\n"));
     }
   } catch (err) {
@@ -162,12 +184,19 @@ async function fetchResendEmailText(emailId: string): Promise<string | null> {
 
     const email = (await resp.json()) as any;
 
+    console.log(`[Resend Webhook] API email fields: ${Object.keys(email).join(", ")}`);
+    console.log(`[Resend Webhook] API email.text: ${fieldSummary(email.text)}`);
+    console.log(`[Resend Webhook] API email.html: ${fieldSummary(email.html)}`);
+
     // Prefer plain text; fall back to HTML stripped of tags
     const plain = asString(email.text);
     if (plain) return plain;
 
     const html = asString(email.html);
-    if (!html) return null;
+    if (!html) {
+      console.warn("[Resend Webhook] API response has neither text nor html content");
+      return null;
+    }
 
     return html
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -424,7 +453,15 @@ function asString(value: unknown): string | null {
   return trimmed || null;
 }
 
+function fieldSummary(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return `string(${value.length})`;
+  return typeof value;
+}
+
 function buildBodyPreview(data: Record<string, any>): string | null {
+  console.log(`[Resend Webhook] buildBodyPreview fields — text: ${fieldSummary(data.text)}, plainText: ${fieldSummary(data.plainText)}, body: ${fieldSummary(data.body)}, html: ${fieldSummary(data.html)}`);
   const text = asString(data.text) || asString(data.plainText) || asString(data.body);
   if (text) return truncateSingleLine(text, 280);
 
