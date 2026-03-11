@@ -36,5 +36,6 @@ export const config = {
   },
   resend: {
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET || "",
+    apiKey: process.env.RESEND_API_KEY || "",
   },
 } as const;
