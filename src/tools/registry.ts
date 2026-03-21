@@ -39,6 +39,7 @@ export function generateToolsParam() {
   return getAllTools().map((tool) => {
     const properties: Record<string, any> = {};
     const required: string[] = [];
+    const parameterNames = Object.keys(tool.parameters);
 
     for (const [key, param] of Object.entries(tool.parameters)) {
       const prop: Record<string, any> = { type: param.type, description: param.description };
@@ -51,7 +52,7 @@ export function generateToolsParam() {
       type: "function" as const,
       function: {
         name: tool.name,
-        description: tool.description,
+        description: `${tool.description} | Parameters: ${parameterNames.length ? parameterNames.join(", ") : "none"}`,
         parameters: { type: "object", properties, required },
       },
     };
