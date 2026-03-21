@@ -199,7 +199,7 @@ export async function triggerAutonomousCheck(reason: string): Promise<void> {
   const prompt = buildAutonomousPrompt(contextStr);
 
   try {
-    await sendSmartProactiveMessage(OWNER, `[SYSTEM] ${reason}. Check tasks with list_my_tasks, consider the time of day, and suggest the specific next task Mohammed should work on. Be direct and actionable.`);
+    await sendSmartProactiveMessage(OWNER, `[SYSTEM] ${reason}. Check tasks with list_my_tasks, consider the time of day, and suggest the specific next task the user should work on. Be direct and actionable.`);
     recordAutonomousAction(OWNER);
   } catch (err) {
     console.error("[Autonomy] Event trigger error:", err);
@@ -243,7 +243,7 @@ async function autonomousLLMCheck(systemPrompt: string): Promise<string | null> 
       console.log("[Autonomy] LLM wants to use tools, delegating to smart proactive flow");
       const snap = buildSnapshot();
       await sendSmartProactiveMessage(OWNER,
-        `[SYSTEM] Autonomous check detected something worth acting on. Context:\n${formatSnapshot(snap)}\n\nUse tools to gather info and send Mohammed a useful, concise message.`
+        `[SYSTEM] Autonomous check detected something worth acting on. Context:\n${formatSnapshot(snap)}\n\nUse tools to gather info and send the user a useful, concise message.`
       );
       return "__HANDLED__";
     }
