@@ -1,3 +1,5 @@
+import { getAllTools } from "./tools";
+
 /**
  * Determines the active workstream based on day and hour.
  */
@@ -38,6 +40,18 @@ export function buildSystemPrompt(): string {
   });
 
   const ctx = getActiveContext(now);
+  const toolReference = getAllTools()
+    .map((tool) => {
+      const params = Object.entries(tool.parameters).map(([name, meta]) => {
+        const required = meta.required ? "required" : "optional";
+        const type = meta.enum?.length ? `${meta.type} (${meta.enum.join(" | ")})` : meta.type;
+        return `    - ${name}: ${type}, ${required} — ${meta.description}`;
+      });
+      return params.length
+        ? `- ${tool.name}: ${tool.description}\n${params.join("\n")}`
+        : `- ${tool.name}: ${tool.description}\n    - (no parameters)`;
+    })
+    .join("\n");
 
   return `You are Farid, a personal assistant on WhatsApp. Communicate like a real human accountability partner who genuinely cares. Be direct and clear.
 You represent Mohammed's assistant service, and you can communicate with any user (not only Mohammed). Never describe yourself as an AI, model, bot, or assistant software.
@@ -73,24 +87,10 @@ The core problem: 24 hours isn't enough. Overwhelm leads to scrolling Instagram 
 
 You have a rich set of tools. Use them proactively — don't just talk, ACT. You can call multiple tools at once.
 
-**Task management**: create_task, list_my_tasks, update_task, search_tasks, complete_task, get_task_summary, list_projects
-**Memory**: save_note (remember facts/decisions), search_notes (recall past context), delete_note
-**Journal**: log_journal (daily reflection), get_journal (review past entries)
-**Habits**: create_habit, check_habit (mark done), habit_status (show streaks), delete_habit
-**Focus**: start_focus, end_focus, start_sprint (5-min anti-procrastination burst)
-**Planning**: plan_my_day (create time-blocked schedule with auto-reminders)
-**Reminders**: set_reminder, set_recurring_reminder, list_reminders, cancel_reminder
-**Stats**: get_stats, productivity_score
-**Web**: web_search (search the internet), summarize_url (summarize any webpage)
-**GitHub**: github_activity (check coding activity)
-**WhatsApp to contacts**: send_whatsapp_text, send_whatsapp_voice, send_whatsapp_image — send messages, voice notes, or images to any number the user specifies
-**Phone automation**: phone_do_task — give it a natural language goal (e.g. "Open WhatsApp, find Abdelghani, type hello, send") and it autonomously reads the screen, taps, swipes, types, and navigates until done. USE THIS for any multi-step phone task.
-**Phone control** (low-level, for single actions):
-- _Gestures_: phone_tap, phone_double_tap, phone_long_press, phone_swipe
-- _Apps_: phone_launch_app, phone_terminate_app, phone_open_url
-- _Input_: phone_send_text, phone_press_button
-- _Screen_: phone_screenshot, phone_get_ui_elements, phone_screen_size, phone_get_orientation, phone_set_orientation
-- _Device_: phone_ring, phone_vibrate, phone_flash, phone_device_info
+Tool reference (name, purpose, and exact parameter names):
+${toolReference}
+
+IMPORTANT: When calling tools, use the exact parameter names listed above. Do not rename parameters.
 
 For dates/times, always use ISO 8601 format based on the current time above.
 
