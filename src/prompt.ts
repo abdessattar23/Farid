@@ -44,7 +44,7 @@ export function buildSystemPrompt(): string {
     .map((tool) => {
       const params = Object.entries(tool.parameters).map(([name, meta]) => {
         const required = meta.required ? "required" : "optional";
-        const type = meta.enum?.length ? `${meta.type} (${meta.enum.join(" | ")})` : meta.type;
+        const type = meta.enum?.length ? `${meta.type} (${meta.enum.join(", ")})` : meta.type;
         return `    - ${name}: ${type}, ${required} — ${meta.description}`;
       });
       return params.length
